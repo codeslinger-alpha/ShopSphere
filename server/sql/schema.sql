@@ -46,7 +46,7 @@ create table users
     user_role INT REFERENCES roles(role_id) on delete set null,--call a trigger to disable user
     name VARCHAR not null,
     password_hash TEXT not null,
-    phone_numbers VARCHAR(20)[],
+    phone_numbers VARCHAR(20),
     pfp TEXT,
     email varchar(60) unique not null,
     address INT REFERENCES locations(location_id) on delete set null,
@@ -65,7 +65,7 @@ create table shops(
     earnings decimal default 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     active_status varchar check(active_status in ('active','disabled')) default 'active',--when disabled,call a trigger to set product(discontinued) to true   
-    phone_numbers VARCHAR(20)[],
+    phone_numbers VARCHAR(20),
     address INT REFERENCES locations(location_id) on delete set null
 );
 create table categories(
@@ -147,7 +147,7 @@ create table shop_reviews(
 create table delivery_personnel(
     delivery_person_id INT references users(user_id)  on delete restrict  primary key,
     vehicle_info TEXT,
-    active_status varchar check(active_status in ('available','on_delivery','unavailable')) default 'active',--when :new.active_status='unavailable' when order still 'shipped' or 'pending', set orders.delivery personnel:=null and order_status:='pending'
+    active_status varchar check(active_status in ('available','on_delivery','unavailable')) default 'available',--when :new.active_status='unavailable' when order still 'shipped' or 'pending', set orders.delivery personnel:=null and order_status:='pending'
     earnings decimal 
 
 );

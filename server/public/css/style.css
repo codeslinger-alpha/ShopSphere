@@ -1,0 +1,140 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f4f4f4;
+    color: #222;
+}
+
+
+/* Navigation */
+
+nav {
+    background: #222;
+    color: white;
+
+    padding: 15px 30px;
+
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+nav a {
+    color: white;
+    text-decoration: none;
+    margin-left: 20px;
+}
+
+nav > a {
+    font-size: 22px;
+    font-weight: bold;
+    margin-left: 0;
+}
+
+
+/* Home */
+
+.home {
+    text-align: center;
+    padding: 100px 20px;
+}
+
+
+/* Forms */
+
+.form-container {
+    width: 350px;
+    margin: 70px auto;
+
+    background: white;
+
+    padding: 30px;
+
+    border-radius: 8px;
+}
+
+.form-container h1,
+.form-container h2 {
+    text-align: center;
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+input,
+select,
+button {
+    padding: 10px;
+    font-size: 16px;
+}
+
+button,
+.button {
+    background: #222;
+    color: white;
+
+    border: none;
+
+    padding: 10px;
+
+    text-decoration: none;
+
+    text-align: center;
+
+    cursor: pointer;
+}
+
+.form-link {
+    text-align: center;
+}
+
+
+/* General pages */
+
+.page {
+    padding: 40px;
+}
+
+.products {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.product-card {
+    background: white;
+
+    width: 220px;
+
+    padding: 20px;
+
+    border-radius: 8px;
+}
+
+
+/* Dashboards */
+
+.dashboard {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.dashboard a {
+    background: white;
+
+    padding: 30px;
+
+    text-decoration: none;
+
+    color: #222;
+
+    border-radius: 8px;
+}
