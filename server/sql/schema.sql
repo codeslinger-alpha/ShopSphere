@@ -3,7 +3,7 @@ descriptions should support markdown formatting
 */
 /*
 To-do:
-Check triggers
+Only users who bought product can review
 Process product restock on cancellation of order
 Process product compensation to shop owner on removal of product by  admin
 */
@@ -78,7 +78,7 @@ create table categories(
 create table master_products(
     master_prod_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     manufacturer VARCHAR not null,
-    images TEXT[],
+    images TEXT,--will use table for images later
     description TEXT,
     category_id INT REFERENCES categories(category_id) on delete restrict not null ,
     wholesale_price DECIMAL not null,
@@ -91,7 +91,7 @@ create table master_products(
 create table products(
     prod_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name VARCHAR not null,
-    images TEXT[],
+    images TEXT,--will use table for images later
     master_prod_id INT REFERENCES master_products(master_prod_id) on delete restrict not null ,
     description TEXT,
     shop_id INT references shops(shop_id) not null,
