@@ -8,8 +8,8 @@ Process product restock on cancellation of order
 Process product compensation to shop owner on removal of product by  admin
 */
 --To drop everything, run:
-/* DROP SCHEMA public CASCADE;
-CREATE SCHEMA public; */
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
 
 --tables
 CREATE table countries(
@@ -42,7 +42,7 @@ create table role_permissions(
 --raise exception when deleting  from users
 create table users
 (
-    user_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    username VARCHAR PRIMARY KEY,
     user_role INT REFERENCES roles(role_id) on delete set null,--call a trigger to disable user
     name VARCHAR not null,
     password_hash TEXT not null,
@@ -57,7 +57,7 @@ create table users
 --raise exception when deleting from shops 
 create table shops(
     shop_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    owner INT REFERENCES users(user_id) not null ,
+    owner VARCHAR REFERENCES users(username) not null ,
     name VARCHAR not null,
     logo TEXT,
     cover_photo TEXT,
@@ -117,35 +117,35 @@ create table attribute_values(
     PRIMARY KEY(master_prod_id,attribute_id)
 );
 create table cart_items(
-    user_id INT REFERENCES users(user_id) on delete cascade not null ,
+    username VARCHAR REFERENCES users(username) on delete cascade not null ,
     prod_id INT REFERENCES products(prod_id) on delete cascade not null ,
     quantity INT not null,
-    PRIMARY KEY(user_id,prod_id)
+    PRIMARY KEY(username,prod_id)
 );
 create table wish_list_items(
-    user_id INT REFERENCES users(user_id) on delete cascade not null ,
+    username VARCHAR REFERENCES users(username) on delete cascade not null ,
     prod_id INT REFERENCES products(prod_id) on delete cascade not null ,
-    PRIMARY KEY(user_id,prod_id)
+    PRIMARY KEY(username,prod_id)
 );
 create table product_reviews(
-    user_id INT REFERENCES users(user_id)on delete cascade not null ,
+    username VARCHAR REFERENCES users(username)on delete cascade not null ,
     prod_id INT REFERENCES products(prod_id)on delete cascade not null ,
     rating INT check(rating between 1 and 5) not null,
     review TEXT,
     last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(user_id,prod_id)
+    PRIMARY KEY(username,prod_id)
 );
 create table shop_reviews(
-    user_id INT REFERENCES users(user_id) on delete cascade not null,
+    username VARCHAR REFERENCES users(username) on delete cascade not null,
     shop_id INT REFERENCES shops(shop_id) on delete cascade not null,
     rating INT check(rating between 1 and 5) not null,
     review TEXT,
     last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(user_id,shop_id)
+    PRIMARY KEY(username,shop_id)
 );
 --raise exception when deleting from delivery_personnel
 create table delivery_personnel(
-    delivery_person_id INT references users(user_id)  on delete restrict  primary key,
+    delivery_person_id VARCHAR REFERENCES users(username)  on delete restrict  primary key,
     vehicle_info TEXT,
     active_status varchar check(active_status in ('available','on_delivery','unavailable')) default 'available',--when :new.active_status='unavailable' when order still 'shipped' or 'pending', set orders.delivery personnel:=null and order_status:='pending'
     earnings decimal 
@@ -155,8 +155,8 @@ create table delivery_personnel(
 create table orders(
     order_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, 
     order_status VARCHAR check(order_status in ('pending','shipped','delivered','cancelled')) default 'pending',--if cancelled, trigger to set delivery_person_id:=null and delete from order_items  and payments
-    user_id INT REFERENCES users(user_id) not null,
-    delivery_person_id INT REFERENCES delivery_personnel(delivery_person_id) default null,
+    username VARCHAR REFERENCES users(username) not null,
+    delivery_person_id VARCHAR REFERENCES delivery_personnel(delivery_person_id) default null,
     delivered_at TIMESTAMP default null,
     total_amount DECIMAL not null,
     delivery_cost DECIMAL default 0,
@@ -348,13 +348,13 @@ BEGIN
     -- disable any shops this user owns
     UPDATE shops
     SET active_status = 'disabled'
-    WHERE owner = NEW.user_id
+    WHERE owner = NEW.username
       AND active_status IS DISTINCT FROM 'disabled';
 
     -- if this user is also delivery personnel, take them off duty
     UPDATE delivery_personnel
     SET active_status = 'unavailable'
-    WHERE delivery_person_id = NEW.user_id
+    WHERE delivery_person_id = NEW.username
       AND active_status IS DISTINCT FROM 'unavailable';
 
     RETURN NEW;
