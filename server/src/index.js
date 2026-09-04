@@ -24,6 +24,8 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const pool = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
+const cartRoutes = require("./routes/cartRoutes");
+const wishlistRoutes = require("./routes/wishlistRoutes");
 
 const app = express();
 
@@ -41,6 +43,8 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 app.use("/api", authRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/wishlist", wishlistRoutes);
 
 
 // Serve files inside public/
@@ -525,7 +529,7 @@ app.get("/api/users", async (req, res) => {
 // CART
 // ==================================================
 
-
+/*
 // Get user's cart
 
 app.get("/api/cart/:userId", async (req, res) => {
@@ -735,7 +739,9 @@ app.delete("/api/cart", async (req, res) => {
 // ==================================================
 // WISHLIST
 // ==================================================
+*/
 
+/*
 app.get("/api/wishlist/:userId", async (req, res) => {
 
     const userId = req.params.userId;
@@ -829,6 +835,7 @@ app.post("/api/wishlist", async (req, res) => {
 // ==================================================
 // START SERVER
 // ==================================================
+*/
 
 app.listen(PORT, () => {
 

@@ -92,18 +92,6 @@ async function loadProducts() {
 // --------------------------------------------------
 
 async function addToCart(productId) {
-
-    // Temporary because authentication doesn't exist yet.
-
-    const userId =
-        prompt("Enter your user ID");
-
-
-    if (!userId) {
-        return;
-    }
-
-
     try {
 
         const response =
@@ -116,7 +104,6 @@ async function addToCart(productId) {
                 },
 
                 body: JSON.stringify({
-                    user_id: Number(userId),
                     prod_id: productId,
                     quantity: 1
                 })
@@ -127,13 +114,13 @@ async function addToCart(productId) {
             await response.json();
 
 
-        if (data.success) {
+        if (response.ok) {
 
             alert("Added to cart.");
 
         } else {
 
-            alert(data.message);
+            alert(data.message || "Please sign in as a customer to use the cart.");
         }
 
 
@@ -151,16 +138,6 @@ async function addToCart(productId) {
 // --------------------------------------------------
 
 async function addToWishlist(productId) {
-
-    const userId =
-        prompt("Enter your user ID");
-
-
-    if (!userId) {
-        return;
-    }
-
-
     try {
 
         const response =
@@ -173,7 +150,6 @@ async function addToWishlist(productId) {
                 },
 
                 body: JSON.stringify({
-                    user_id: Number(userId),
                     prod_id: productId
                 })
             });
@@ -183,13 +159,13 @@ async function addToWishlist(productId) {
             await response.json();
 
 
-        if (data.success) {
+        if (response.ok) {
 
-            alert("Added to wishlist.");
+            alert(data.message);
 
         } else {
 
-            alert(data.message);
+            alert(data.message || "Please sign in as a customer to use the wishlist.");
         }
 
 
