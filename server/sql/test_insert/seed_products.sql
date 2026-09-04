@@ -98,7 +98,7 @@ FROM (
     VALUES
         (
             'Dell',
-            ARRAY['dell-inspiron-15.jpg'],
+            'dell-inspiron-15.jpg',
             '15-inch laptop suitable for study, office work, and everyday computing.',
             'Laptops',
             550.00::DECIMAL,
@@ -106,7 +106,7 @@ FROM (
         ),
         (
             'Lenovo',
-            ARRAY['lenovo-ideapad-3.jpg'],
+            'lenovo-ideapad-3.jpg',
             'Affordable laptop designed for students and everyday productivity.',
             'Laptops',
             420.00::DECIMAL,
@@ -114,7 +114,7 @@ FROM (
         ),
         (
             'ASUS',
-            ARRAY['asus-tuf-a15.jpg'],
+            'asus-tuf-a15.jpg',
             'Gaming laptop with a dedicated graphics processor.',
             'Laptops',
             850.00::DECIMAL,
@@ -122,7 +122,7 @@ FROM (
         ),
         (
             'Apple',
-            ARRAY['macbook-air-m3.jpg'],
+            'macbook-air-m3.jpg',
             'Thin and lightweight laptop powered by Apple silicon.',
             'Laptops',
             850.00::DECIMAL,
@@ -130,7 +130,7 @@ FROM (
         ),
         (
             'Intel',
-            ARRAY['intel-core-i5.jpg'],
+            'intel-core-i5.jpg',
             'Desktop processor for general-purpose computing.',
             'Computer Components',
             160.00::DECIMAL,
@@ -138,7 +138,7 @@ FROM (
         ),
         (
             'AMD',
-            ARRAY['amd-ryzen-5.jpg'],
+            'amd-ryzen-5.jpg',
             'Multi-core desktop processor for productivity and gaming.',
             'Computer Components',
             140.00::DECIMAL,
@@ -146,7 +146,7 @@ FROM (
         ),
         (
             'Logitech',
-            ARRAY['logitech-mx-master-3s.jpg'],
+            'logitech-mx-master-3s.jpg',
             'Wireless ergonomic computer mouse.',
             'Computer Accessories',
             55.00::DECIMAL,
@@ -154,7 +154,7 @@ FROM (
         ),
         (
             'Logitech',
-            ARRAY['logitech-k380.jpg'],
+            'logitech-k380.jpg',
             'Compact wireless keyboard suitable for desktop and mobile use.',
             'Computer Accessories',
             28.00::DECIMAL,
@@ -162,7 +162,7 @@ FROM (
         ),
         (
             'Samsung',
-            ARRAY['samsung-galaxy-s25.jpg'],
+            'samsung-galaxy-s25.jpg',
             'Modern Android smartphone with a high-resolution display.',
             'Smartphones',
             650.00::DECIMAL,
@@ -170,7 +170,7 @@ FROM (
         ),
         (
             'Apple',
-            ARRAY['iphone-16.jpg'],
+            'iphone-16.jpg',
             'Apple smartphone with advanced camera and performance features.',
             'Smartphones',
             720.00::DECIMAL,
@@ -178,7 +178,7 @@ FROM (
         ),
         (
             'Xiaomi',
-            ARRAY['xiaomi-redmi-note.jpg'],
+            'xiaomi-redmi-note.jpg',
             'Affordable smartphone with a large display and long battery life.',
             'Smartphones',
             180.00::DECIMAL,
@@ -186,7 +186,7 @@ FROM (
         ),
         (
             'Anker',
-            ARRAY['anker-charger.jpg'],
+            'anker-charger.jpg',
             'USB-C fast charger for smartphones and other compatible devices.',
             'Phone Accessories',
             15.00::DECIMAL,
@@ -194,7 +194,7 @@ FROM (
         ),
         (
             'Anker',
-            ARRAY['anker-power-bank.jpg'],
+            'anker-power-bank.jpg',
             'Portable rechargeable power bank.',
             'Phone Accessories',
             22.00::DECIMAL,
@@ -202,7 +202,7 @@ FROM (
         ),
         (
             'Philips',
-            ARRAY['philips-air-fryer.jpg'],
+            'philips-air-fryer.jpg',
             'Compact air fryer for convenient home cooking.',
             'Kitchen Appliances',
             65.00::DECIMAL,
@@ -210,7 +210,7 @@ FROM (
         ),
         (
             'Samsung',
-            ARRAY['samsung-microwave.jpg'],
+            'samsung-microwave.jpg',
             'Countertop microwave oven for everyday cooking.',
             'Kitchen Appliances',
             90.00::DECIMAL,
@@ -218,7 +218,7 @@ FROM (
         ),
         (
             'Nike',
-            ARRAY['nike-running-shoes.jpg'],
+            'nike-running-shoes.jpg',
             'Lightweight running shoes for everyday training.',
             'Footwear',
             55.00::DECIMAL,
@@ -226,7 +226,7 @@ FROM (
         ),
         (
             'Adidas',
-            ARRAY['adidas-tshirt.jpg'],
+            'adidas-tshirt.jpg',
             'Comfortable sports T-shirt for training and casual use.',
             'Men''s Clothing',
             18.00::DECIMAL,
@@ -234,7 +234,7 @@ FROM (
         ),
         (
             'Coca-Cola',
-            ARRAY['coca-cola.jpg'],
+            'coca-cola.jpg',
             'Carbonated soft drink.',
             'Beverages',
             0.50::DECIMAL,
@@ -242,7 +242,7 @@ FROM (
         ),
         (
             'Nestle',
-            ARRAY['nestle-chocolate.jpg'],
+            'nestle-chocolate.jpg',
             'Milk chocolate snack.',
             'Snacks',
             1.00::DECIMAL,
@@ -250,7 +250,7 @@ FROM (
         ),
         (
             'Nivea',
-            ARRAY['nivea-body-lotion.jpg'],
+            'nivea-body-lotion.jpg',
             'Moisturizing body lotion for everyday skin care.',
             'Skin Care',
             4.00::DECIMAL,
@@ -258,7 +258,7 @@ FROM (
         ),
         (
             'Philips',
-            ARRAY['philips-trimmer.jpg'],
+            'philips-trimmer.jpg',
             'Rechargeable electric trimmer for personal grooming.',
             'Personal Care',
             18.00::DECIMAL,
@@ -266,7 +266,7 @@ FROM (
         ),
         (
             'Decathlon',
-            ARRAY['decathlon-yoga-mat.jpg'],
+            'decathlon-yoga-mat.jpg',
             'Non-slip exercise mat for yoga and floor exercises.',
             'Fitness Equipment',
             12.00::DECIMAL,

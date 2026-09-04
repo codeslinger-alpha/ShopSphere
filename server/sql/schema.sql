@@ -52,6 +52,7 @@ create table users
     address INT REFERENCES locations(location_id) on delete set null,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     point int default 0 not null,
+    token_version INT NOT NULL DEFAULT 0,
     active_status varchar check(active_status in ('active','disabled')) default 'active'--call a trigger to disable shops, delivery_personnel 
 );
 --raise exception when deleting from shops 
@@ -81,7 +82,7 @@ create table master_products(
     images TEXT,--will use table for images later
     description TEXT,
     category_id INT REFERENCES categories(category_id) on delete restrict not null ,
-    wholesale_price DECIMAL not null,
+    wholesale_price NUMERIC(12,2) NOT NULL CHECK (wholesale_price >= 0),
     name VARCHAR not null,
     active_status VARCHAR check(active_status in ('available','discontinued')) default 'available',
     date_created TIMESTAMP default CURRENT_TIMESTAMP
@@ -95,10 +96,10 @@ create table products(
     master_prod_id INT REFERENCES master_products(master_prod_id) on delete restrict not null ,
     description TEXT,
     shop_id INT references shops(shop_id) not null,
-    in_stock INT,
+    in_stock INT NOT NULL DEFAULT 0 CHECK (in_stock >= 0),
     discontinued boolean default false,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    unit_price DECIMAL 
+    unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0)
 );
 create table attributes(
     attribute_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -119,7 +120,7 @@ create table attribute_values(
 create table cart_items(
     user_id INT REFERENCES users(user_id) on delete cascade not null ,
     prod_id INT REFERENCES products(prod_id) on delete cascade not null ,
-    quantity INT not null,
+   quantity INT NOT NULL CHECK (quantity > 0),
     PRIMARY KEY(user_id,prod_id)
 );
 create table wish_list_items(
@@ -158,8 +159,9 @@ create table orders(
     user_id INT REFERENCES users(user_id) not null,
     delivery_person_id INT REFERENCES delivery_personnel(delivery_person_id) default null,
     delivered_at TIMESTAMP default null,
-    total_amount DECIMAL not null,
-    delivery_cost DECIMAL default 0,
+    total_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+    platform_commission DECIMAL default 0,
+    delivery_cost NUMERIC(12,2) default 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     shipping_address INT REFERENCES locations(location_id)on delete restrict not null 
 );
@@ -176,8 +178,8 @@ create table payments(
 create table order_items(
     order_id INT REFERENCES orders(order_id) not null,
     prod_id INT REFERENCES products(prod_id) not null,
-    quantity INT not null,
-    unit_price DECIMAL not null,
+    quantity INT not null CHECK (quantity > 0),
+    unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
     platform_commission DECIMAL default 0,
     PRIMARY KEY(order_id,prod_id)
 );

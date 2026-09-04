@@ -21,7 +21,9 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const pool = require("./db");
+const cookieParser = require("cookie-parser");
+const pool = require("./config/db");
+const authRoutes = require("./routes/authRoutes");
 
 const app = express();
 
@@ -32,8 +34,13 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 // --------------------------------------------------
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
+    credentials: true
+}));
 app.use(express.json());
+app.use(cookieParser());
+app.use("/api", authRoutes);
 
 
 // Serve files inside public/
@@ -104,6 +111,7 @@ app.get("/api/roles", async (req, res) => {
 });
 
 
+/*
 // ==================================================
 // SIGN UP
 // ==================================================
@@ -301,6 +309,7 @@ app.post("/api/login", async (req, res) => {
 // ==================================================
 // PRODUCTS
 // ==================================================
+*/
 
 app.get("/api/products", async (req, res) => {
 

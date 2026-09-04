@@ -37,17 +37,26 @@ form.addEventListener("submit", async (event) => {
         const data = await response.json();
 
 
-        if (data.success) {
+        if (response.ok) {
 
             message.textContent =
                 `Welcome, ${data.user.name}!`;
 
-            console.log(data.user);
+            const dashboards = {
+                customer: "customer.html",
+                vendor: "vendor.html",
+                delivery: "delivery.html",
+                admin: "admin.html"
+            };
+
+            window.setTimeout(() => {
+                window.location.href = dashboards[data.user.role];
+            }, 500);
 
         } else {
 
             message.textContent =
-                data.message;
+                data.message || "Could not log in.";
         }
 
     } catch (error) {

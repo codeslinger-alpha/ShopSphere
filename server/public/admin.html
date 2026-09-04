@@ -16,7 +16,7 @@
         <a href="index.html">ShopSphere</a>
 
         <div>
-            <a href="login.html">Sign Out</a>
+            <a id="signOut" href="login.html">Sign Out</a>
         </div>
     </nav>
 
@@ -35,5 +35,7 @@
 
     </main>
 
+    <script src="js/session.js"></script>
+    <script>enforcePageRole("admin");</script>
 </body>
 </html>

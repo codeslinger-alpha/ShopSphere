@@ -17,7 +17,7 @@
 
         <div>
             <a href="products.html">Products</a>
-            <a href="login.html">Sign Out</a>
+            <a id="signOut" href="login.html">Sign Out</a>
         </div>
     </nav>
 
@@ -47,5 +47,7 @@
 
     </main>
 
+    <script src="js/session.js"></script>
+    <script>enforcePageRole("customer");</script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-a<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -16,7 +16,7 @@ a<!DOCTYPE html>
         <a href="index.html">ShopSphere</a>
 
         <div>
-            <a href="login.html">Sign Out</a>
+            <a id="signOut" href="login.html">Sign Out</a>
         </div>
     </nav>
 
@@ -34,5 +34,7 @@ a<!DOCTYPE html>
 
     </main>
 
+    <script src="js/session.js"></script>
+    <script>enforcePageRole("delivery");</script>
 </body>
 </html>

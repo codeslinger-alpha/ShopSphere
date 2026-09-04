@@ -41,17 +41,21 @@ form.addEventListener("submit", async (event) => {
         const data = await response.json();
 
 
-        if (data.success) {
+        if (response.ok) {
 
             message.textContent =
                 "Account created successfully.";
 
             form.reset();
 
+            window.setTimeout(() => {
+                window.location.href = "login.html";
+            }, 500);
+
         } else {
 
             message.textContent =
-                data.message;
+                data.message || "Could not create the account.";
         }
 
     } catch (error) {
