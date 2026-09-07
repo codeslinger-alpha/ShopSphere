@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const {
   GET_PRODUCT_BY_ID,
+  GET_MASTER_ATTRIBUTE_VALUES,
   LIST_CATEGORIES,
   LIST_PRODUCTS,
   LIST_ROLES,
@@ -47,7 +48,11 @@ async function getProduct(req, res) {
       return res.status(404).json({ message: "Product not found." }); // 404 Not Found: the requested route or record could not be found.
     }
 
-    return res.json(result.rows[0]);
+    const product = result.rows[0];
+    const attributes = await pool.query(GET_MASTER_ATTRIBUTE_VALUES, [
+      product.master_prod_id,
+    ]);
+    return res.json({ ...product, attributes: attributes.rows });
   } catch (error) {
     console.error("Get product error:", error);
     return res.status(500).json({ message: "Could not load the product." }); // 500 Internal Server Error: an unexpected server or database failure occurred.

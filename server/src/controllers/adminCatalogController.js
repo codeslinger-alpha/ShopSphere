@@ -2,24 +2,57 @@ const pool = require("../config/db");
 const transaction = require("../utils/transaction");
 const v = require("../utils/input");
 const q = require("../queries/adminCatalogQueries");
+function attachMasterAttributes(masters, rows) {
+  const attributesByMaster = new Map();
+  for (const row of rows) {
+    const attributes = attributesByMaster.get(row.master_prod_id) || [];
+    attributes.push({
+      attribute_id: row.attribute_id,
+      name: row.name,
+      description: row.description,
+      attrib_value: row.attrib_value,
+      required: row.required,
+    });
+    attributesByMaster.set(row.master_prod_id, attributes);
+  }
+  return masters.map((master) => ({
+    ...master,
+    attributes: attributesByMaster.get(master.master_prod_id) || [],
+  }));
+}
 async function listMasters(req, res) {
-  res.json(
-    (await pool.query(q.LIST_MASTERS)).rows,
-  );
+  const [masters, attributes] = await Promise.all([
+    pool.query(q.LIST_MASTERS),
+    pool.query(q.LIST_MASTER_ATTRIBUTES),
+  ]);
+  res.json(attachMasterAttributes(masters.rows, attributes.rows));
 }
 async function availableMasters(req, res) {
-  res.json(
-    (
-      await pool.query(q.LIST_AVAILABLE_MASTERS)
-    ).rows,
-  );
+  const [masters, attributes] = await Promise.all([
+    pool.query(q.LIST_AVAILABLE_MASTERS),
+    pool.query(q.LIST_MASTER_ATTRIBUTES),
+  ]);
+  res.json(attachMasterAttributes(masters.rows, attributes.rows));
 }
 async function metadata(req, res) {
-  const [categories, attributes] = await Promise.all([
+  const [categories, attributes, links] = await Promise.all([
     pool.query(q.LIST_CATALOG_CATEGORIES),
     pool.query(q.LIST_ATTRIBUTES),
+    pool.query(q.LIST_CATEGORY_ATTRIBUTES),
   ]);
-  res.json({ categories: categories.rows, attributes: attributes.rows });
+  const idsByCategory = new Map();
+  for (const link of links.rows) {
+    const ids = idsByCategory.get(link.category_id) || [];
+    ids.push(link.attribute_id);
+    idsByCategory.set(link.category_id, ids);
+  }
+  res.json({
+    categories: categories.rows.map((category) => ({
+      ...category,
+      attribute_ids: idsByCategory.get(category.category_id) || [],
+    })),
+    attributes: attributes.rows,
+  });
 }
 async function createAttribute(req, res) {
   const name = v.string(req.body?.name, "Attribute name", 100, true),

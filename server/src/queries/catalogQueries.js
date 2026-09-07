@@ -21,9 +21,8 @@ const LIST_PRODUCTS = `
 const GET_PRODUCT_BY_ID = `
     SELECT p.prod_id, p.name, p.images, p.description, p.in_stock, p.unit_price,
            s.shop_id, s.name AS shop_name,
-           mp.master_prod_id, mp.manufacturer, c.name AS category_name, mp.description AS master_description,
-           COALESCE((SELECT json_agg(json_build_object('name',a.name,'attrib_value',av.attrib_value) ORDER BY a.name)
-           FROM attribute_values av JOIN attributes a USING(attribute_id) WHERE av.master_prod_id=mp.master_prod_id),'[]'::json) AS attributes
+           mp.master_prod_id, mp.manufacturer, c.name AS category_name,
+           mp.description AS master_description
     FROM products p
     JOIN shops s ON p.shop_id = s.shop_id
     JOIN master_products mp ON p.master_prod_id = mp.master_prod_id
@@ -32,6 +31,14 @@ const GET_PRODUCT_BY_ID = `
       AND p.discontinued = false
       AND s.active_status = 'active'
       AND mp.active_status = 'available'
+`;
+
+const GET_MASTER_ATTRIBUTE_VALUES = `
+    SELECT a.name, av.attrib_value
+    FROM attribute_values av
+    JOIN attributes a ON a.attribute_id = av.attribute_id
+    WHERE av.master_prod_id = $1
+    ORDER BY a.name
 `;
 
 const LIST_CATEGORIES = `
@@ -56,6 +63,7 @@ const LIST_USERS = `
 
 module.exports = {
   GET_PRODUCT_BY_ID,
+  GET_MASTER_ATTRIBUTE_VALUES,
   LIST_CATEGORIES,
   LIST_PRODUCTS,
   LIST_ROLES,
