@@ -1,3 +1,4 @@
+
 const LIST_OWNED_SHOPS = `
   SELECT
     s.*,
