@@ -80,6 +80,13 @@ export default function CustomerCollectionPage({ type }) {
     setRetry((current) => current + 1);
   }
 
+  // Only the cart has prices to total; a wishlist row carries no subtotal.
+  const total = isCart
+    ? items.reduce((sum, item) => sum + Number(item.subtotal), 0)
+    : 0;
+  const blocked =
+    isCart && items.some((item) => !item.available || item.quantity > item.in_stock);
+
   return (
     <main className="content narrow" aria-busy={isLoading || isSaving}>
       <div className="page-heading">
@@ -88,8 +95,8 @@ export default function CustomerCollectionPage({ type }) {
       </div>
       {isCart && (
         <p className="muted">
-          Choose a quantity, then press Update to save it. Items in your cart do
-          not reserve stock.
+          Choose a quantity, then press Update to save it. Stock is claimed when
+          you place the order, not while it sits in your cart.
         </p>
       )}
       {error && (
@@ -153,6 +160,37 @@ export default function CustomerCollectionPage({ type }) {
               </div>
             </article>
           ))}
+
+          {/* Checkout needs every line to be buyable: the server refuses the
+              whole order if any one of them is short, so sending the customer
+              there with a broken line would only waste the trip. */}
+          {isCart && items.length > 0 && (
+            <section className="cart-summary">
+              <div>
+                <p className="cart-total">
+                  Order total: <strong>${total.toFixed(2)}</strong>
+                </p>
+                {blocked ? (
+                  <p className="error">
+                    Some items are unavailable or exceed the stock. Adjust or
+                    remove them before checking out.
+                  </p>
+                ) : (
+                  <p className="muted">
+                    Pay in cash when the order arrives. Stock is claimed when you
+                    place the order.
+                  </p>
+                )}
+              </div>
+              {blocked ? (
+                <button disabled>Proceed to checkout</button>
+              ) : (
+                <Link className="button primary" to="/checkout">
+                  Proceed to checkout
+                </Link>
+              )}
+            </section>
+          )}
         </>
       )}
     </main>

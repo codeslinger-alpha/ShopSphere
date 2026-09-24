@@ -1,22 +1,143 @@
+const { escapeLikePattern } = require("../utils/sql");
+
 const LIST_ROLES = `
     SELECT role_id, role_name, description
     FROM roles
     ORDER BY role_id
 `;
 
-const LIST_PRODUCTS = `
-    SELECT p.prod_id, p.name, p.images, p.description, p.in_stock, p.unit_price,
-           s.shop_id, s.name AS shop_name,
-           mp.master_prod_id, mp.manufacturer, c.name AS category_name
-    FROM products p
-    JOIN shops s ON p.shop_id = s.shop_id
-    JOIN master_products mp ON p.master_prod_id = mp.master_prod_id
-    JOIN categories c ON c.category_id = mp.category_id
-    WHERE p.discontinued = false
-      AND s.active_status = 'active'
-      AND mp.active_status = 'available'
-    ORDER BY p.prod_id
+const PRODUCT_COLUMNS = `
+    p.prod_id, p.name, p.images, p.description, p.in_stock, p.unit_price,
+    p.created_at,
+    s.shop_id, s.name AS shop_name,
+    mp.master_prod_id, mp.manufacturer,
+    c.category_id, c.name AS category_name
 `;
+
+// Available listings only: the storefront must never show discontinued items,
+// disabled shops or discontinued masters.
+const BASE_CONDITIONS = [
+  "p.discontinued = false",
+  "s.active_status = 'active'",
+  "mp.active_status = 'available'",
+];
+
+// The sort key is chosen from this whitelist, never interpolated from input.
+// Every clause tie-breaks on p.prod_id so paging stays stable across pages.
+const SORT_CLAUSES = {
+  relevance: "p.prod_id DESC",
+  newest: "p.created_at DESC, p.prod_id DESC",
+  price_asc: "p.unit_price ASC, p.prod_id ASC",
+  price_desc: "p.unit_price DESC, p.prod_id DESC",
+  name: "p.name ASC, p.prod_id ASC",
+};
+
+// Builds the category scope and the WHERE conditions for both the listing and
+// the facet query, so the grid and its counts can never disagree about what
+// "matching" means. Parameters are pushed in the order they appear in the
+// final statement: the recursive CTE is emitted before the WHERE clause, so its
+// parameter must be pushed first.
+function buildScope(filters, values, { includeAttributes }) {
+  const conditions = [...BASE_CONDITIONS];
+
+  let cte = "";
+  if (filters.categoryId) {
+    values.push(filters.categoryId);
+    // Selecting a parent category includes every descendant, at any depth.
+    cte = `WITH RECURSIVE category_scope AS (
+      SELECT category_id FROM categories WHERE category_id = $${values.length}
+      UNION ALL
+      SELECT child.category_id FROM categories child
+      JOIN category_scope parent ON child.parent_category = parent.category_id
+    )`;
+    conditions.push("mp.category_id IN (SELECT category_id FROM category_scope)");
+  }
+
+  if (filters.q) {
+    values.push(`%${escapeLikePattern(filters.q)}%`);
+    const term = `$${values.length}`;
+    conditions.push(`(p.name ILIKE ${term} ESCAPE '\\'
+        OR mp.name ILIKE ${term} ESCAPE '\\'
+        OR mp.manufacturer ILIKE ${term} ESCAPE '\\'
+        OR mp.description ILIKE ${term} ESCAPE '\\'
+        OR c.name ILIKE ${term} ESCAPE '\\')`);
+  }
+
+  if (filters.minPrice !== null) {
+    values.push(filters.minPrice);
+    conditions.push(`p.unit_price >= $${values.length}`);
+  }
+
+  if (filters.maxPrice !== null) {
+    values.push(filters.maxPrice);
+    conditions.push(`p.unit_price <= $${values.length}`);
+  }
+
+  if (includeAttributes) {
+    // One EXISTS per attribute: values inside an attribute OR together, and
+    // separate attributes AND together.
+    for (const [attributeId, attributeValues] of filters.attributes) {
+      values.push(attributeId, attributeValues);
+      conditions.push(`EXISTS (
+        SELECT 1 FROM attribute_values av
+        WHERE av.master_prod_id = mp.master_prod_id
+          AND av.attribute_id = $${values.length - 1}
+          AND av.attrib_value = ANY($${values.length})
+      )`);
+    }
+  }
+
+  return { cte, conditions };
+}
+
+function buildProductListQuery(filters) {
+  const values = [];
+  const { cte, conditions } = buildScope(filters, values, {
+    includeAttributes: true,
+  });
+
+  values.push(filters.limit, (filters.page - 1) * filters.limit);
+  const text = `${cte}
+    SELECT ${PRODUCT_COLUMNS}, COUNT(*) OVER() AS total_count
+    FROM products p
+    JOIN shops s ON s.shop_id = p.shop_id
+    JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
+    JOIN categories c ON c.category_id = mp.category_id
+    WHERE ${conditions.join("\n      AND ")}
+    ORDER BY ${SORT_CLAUSES[filters.sort]}
+    LIMIT $${values.length - 1} OFFSET $${values.length}`;
+
+  return { text, values };
+}
+
+// Attribute values are stored per master product, so a facet describes the
+// master rather than the individual shop listing. Counts honor the search,
+// category and price filters but ignore the attribute checkboxes themselves, so
+// a value's count does not collapse to the current selection when it is ticked.
+function buildProductFacetsQuery(filters) {
+  const values = [];
+  const { cte, conditions } = buildScope(filters, values, {
+    includeAttributes: false,
+  });
+
+  const text = `${cte}
+    SELECT a.attribute_id, a.name AS attribute_name,
+           av.attrib_value AS value,
+           COUNT(DISTINCT p.prod_id)::int AS listing_count
+    FROM products p
+    JOIN shops s ON s.shop_id = p.shop_id
+    JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
+    JOIN categories c ON c.category_id = mp.category_id
+    JOIN category_attributes ca ON ca.category_id = mp.category_id
+    JOIN attributes a ON a.attribute_id = ca.attribute_id
+    JOIN attribute_values av ON av.master_prod_id = mp.master_prod_id
+                            AND av.attribute_id = ca.attribute_id
+    WHERE ${conditions.join("\n      AND ")}
+    GROUP BY a.attribute_id, a.name, av.attrib_value
+    ORDER BY a.name, av.attrib_value`;
+
+  return { text, values };
+}
 
 const GET_PRODUCT_BY_ID = `
     SELECT p.prod_id, p.name, p.images, p.description, p.in_stock, p.unit_price,
@@ -54,19 +175,12 @@ const LIST_SHOPS = `
     ORDER BY name
 `;
 
-const LIST_USERS = `
-    SELECT u.user_id, u.name, u.email, u.active_status, r.role_name
-    FROM users u
-    LEFT JOIN roles r ON u.user_role = r.role_id
-    ORDER BY u.user_id
-`;
-
 module.exports = {
   GET_PRODUCT_BY_ID,
   GET_MASTER_ATTRIBUTE_VALUES,
   LIST_CATEGORIES,
-  LIST_PRODUCTS,
   LIST_ROLES,
   LIST_SHOPS,
-  LIST_USERS,
+  buildProductFacetsQuery,
+  buildProductListQuery,
 };

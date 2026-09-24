@@ -1,21 +1,213 @@
+/* ShopSphere design tokens. Every colour, radius and shadow in App.css comes
+   from here, so the palette can be retuned in one place — and, as of the dark
+   theme, so can the palette itself be swapped in one place.
+
+   Dark is the default. The light palette is today's original values, kept
+   under :root[data-theme="light"] so the toggle has somewhere to go. Both
+   blocks declare the same token names: a token that exists in one and not the
+   other would silently inherit, which is how a light-only colour ends up
+   showing through on a dark page.
+
+   Nothing in App.css may use a raw colour literal. If a colour is needed that
+   is not already a token, add the token to both blocks. */
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  color: #15241d;
-  background: #f5f7f3;
+  color-scheme: dark;
+
+  /* Brand green. The ramp inverts between themes: 50 is the most recessed tint
+     and 900 the deepest, so in light mode the ramp runs light-to-dark and in
+     dark mode dark-to-light. --brand-600 and --brand-700 are therefore *text*
+     colours in both themes, and must never be used as a fill behind --on-brand.
+     Fills use --brand-solid and --brand-solid-hover, which stay dark enough for
+     white text in either theme. */
+  --brand-50: #0f1c16;
+  --brand-100: #14261d;
+  --brand-200: #1e3a2b;
+  --brand-300: #2a5540;
+  --brand-500: #4ba97a;
+  --brand-600: #6ee7a4;
+  --brand-700: #9df0c2;
+  --brand-900: #08130e;
+
+  /* Text and surfaces */
+  --ink: #e8f0ea;
+  --ink-2: #a9b8af;
+  --ink-3: #7b8a81;
+  --line: #1e2b25;
+  --line-2: #2a3a32;
+  --surface: #131e19;
+  --surface-2: #101a15;
+  --surface-3: #1b2822;
+  --canvas: #0d1512;
+
+  /* Status */
+  --danger: #ff8a80;
+  --danger-bg: #2a1412;
+  --danger-line: #5a2622;
+  --success-bg: #12291d;
+  --warn: #f5c76a;
+  --warn-bg: #2a2110;
+  --warn-line: #574318;
+  --star: #f5c76a;
+
+  /* Chrome. These four groups were raw literals in App.css and are tokens now
+     precisely because they have to differ between themes. */
+  --header-bg: rgba(13, 21, 18, 0.92);
+  --on-brand: #ffffff;
+  --brand-solid: #2f8552;
+  --brand-solid-hover: #3d9d66;
+  --badge-bg: rgba(5, 12, 9, 0.82);
+  /* The footer is dark in both themes, so these rarely move — but they are
+     still tokens, or they would be the one raw colour left in the file. */
+  --footer-ink: #cfe3d5;
+  --footer-ink-2: #9dbcaa;
+  --footer-ink-3: #8db09b;
+  --footer-line: rgba(255, 255, 255, 0.12);
+
+  /* Shape */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-full: 999px;
+
+  /* Depth. Dark surfaces sit closer to black, so the shadows are black-based
+     here rather than the green-tinted ones the light palette uses. */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sh-2: 0 2px 8px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --sh-3: 0 12px 30px rgba(0, 0, 0, 0.55);
+
+  /* Layout */
+  --page: 1200px;
+  --gutter: max(4vw, 1.25rem);
+  --header-h: 72px;
+
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   font-synthesis: none;
 }
+
+/* The original light palette. Selected by the header toggle, which writes
+   data-theme onto <html>; the inline script in index.html applies the stored
+   choice before React mounts so there is no flash of the wrong theme. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --brand-50: #f1f8f3;
+  --brand-100: #e0efe4;
+  --brand-200: #c1dcc8;
+  --brand-300: #93c2a0;
+  --brand-500: #2f8552;
+  --brand-600: #166534;
+  --brand-700: #12522a;
+  --brand-900: #0b3119;
+
+  --ink: #13211b;
+  --ink-2: #4a5a50;
+  --ink-3: #748376;
+  --line: #e4eae4;
+  --line-2: #cfd9d1;
+  --surface: #ffffff;
+  --surface-2: #f7faf7;
+  --surface-3: #edf2ed;
+  --canvas: #f4f7f3;
+
+  --danger: #b42318;
+  --danger-bg: #fef3f2;
+  --danger-line: #fecdca;
+  --success-bg: #e8f5ec;
+  --warn: #b54708;
+  --warn-bg: #fffaeb;
+  --warn-line: #f5d9a8;
+  /* A rating is not a warning, so it gets its own token rather than borrowing
+     --warn and reading as an alert wherever a review is shown. */
+  --star: #e0940f;
+
+  --header-bg: rgba(255, 255, 255, 0.92);
+  --on-brand: #ffffff;
+  --brand-solid: #166534;
+  --brand-solid-hover: #12522a;
+  --badge-bg: rgba(19, 33, 27, 0.82);
+  --footer-ink: #cfe3d5;
+  --footer-ink-2: #9dbcaa;
+  --footer-ink-3: #8db09b;
+  --footer-line: rgba(255, 255, 255, 0.12);
+
+  --sh-1: 0 1px 2px rgba(15, 32, 24, 0.05);
+  --sh-2: 0 2px 8px rgba(15, 32, 24, 0.06), 0 1px 2px rgba(15, 32, 24, 0.04);
+  --sh-3: 0 12px 30px rgba(15, 32, 24, 0.1);
+}
+
 * {
   box-sizing: border-box;
 }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
   min-width: 320px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 0.5rem;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+  color: inherit;
 }
+
 button {
   cursor: pointer;
+}
+
+/* One visible focus treatment for the whole app. */
+:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

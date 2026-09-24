@@ -4,6 +4,9 @@ import { useAuth } from "../auth/useAuth";
 import { api } from "../api/http";
 import { useResource, useTask } from "../hooks/useResource";
 import { Feedback } from "../components/FormFields";
+import ProductMedia from "../components/ProductMedia";
+import StarRating from "../components/StarRating";
+import { categoryArt } from "../components/imagery";
 export default function ProductDetailPage() {
   const { productId } = useParams(),
     { user } = useAuth(),
@@ -45,16 +48,32 @@ export default function ProductDetailPage() {
       />
       {p && (
         <article className="panel">
-          <h1>{p.name}</h1>
-          {p.images && (
-            <img className="product-image" src={p.images} alt={p.name} />
-          )}
-          <p>
-            {p.shop_name} · {p.manufacturer} · {p.category_name}
-          </p>
-          <p>
-            ${p.unit_price} · {p.in_stock} in stock
-          </p>
+          {/* Media beside the summary, so the price and stock sit next to the
+              picture instead of below the fold on a long description. */}
+          <div className="product-detail-head">
+            <div className="product-media detail">
+              <ProductMedia
+                src={p.images}
+                alt={p.name}
+                name={p.name}
+                art={categoryArt(p.category_name)}
+              />
+            </div>
+            <div>
+              <h1>{p.name}</h1>
+              <p className="product-meta">
+                {[p.shop_name, p.manufacturer, p.category_name]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+              <p className="product-price">${p.unit_price}</p>
+              <p className={p.in_stock < 1 ? "product-stock out" : "product-stock"}>
+                {p.in_stock < 1
+                  ? "Currently unavailable"
+                  : `${p.in_stock} in stock`}
+              </p>
+            </div>
+          </div>
           <h2>Seller description</h2>
           <div className="markdown">
             <ReactMarkdown>
@@ -66,8 +85,9 @@ export default function ProductDetailPage() {
             <ReactMarkdown>{p.master_description || ""}</ReactMarkdown>
           </div>
           {p.attributes?.map((a) => (
-            <p key={a.name}>
-              {a.name}: {a.attrib_value}
+            <p className="attribute-line" key={a.name}>
+              <span>{a.name}</span>
+              {a.attrib_value}
             </p>
           ))}
         </article>
@@ -76,16 +96,15 @@ export default function ProductDetailPage() {
       {reviews.data?.length === 0 && <p>No reviews yet.</p>}
       {reviews.data?.map((r) => (
         <article className="panel" key={r.user_id}>
-          <strong>
-            {r.name} · {r.rating}/5
-          </strong>
+          <strong>{r.name}</strong>
+          <StarRating readOnly value={r.rating} />
           <p className="review-text">{r.review}</p>
           <small>Updated {new Date(r.last_modified).toLocaleString()}</small>
         </article>
       ))}
       {eligibility.data?.eligible ? (
         <form
-          className="panel form"
+          className="panel review-form"
           key={review?.last_modified || "new"}
           onSubmit={save}
         >
@@ -94,16 +113,10 @@ export default function ProductDetailPage() {
             Verified delivered purchase. User ID and modification time are
             recorded automatically.
           </p>
-          <label>
-            Rating
-            <select name="rating" defaultValue={review?.rating || 5}>
-              {[5, 4, 3, 2, 1].map((n) => (
-                <option key={n} value={n}>
-                  {n} stars
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="star-rating-field">
+            <span className="star-rating-label">Rating</span>
+            <StarRating defaultValue={review?.rating || 5} />
+          </div>
           <label>
             Review
             <textarea

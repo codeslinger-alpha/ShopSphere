@@ -50,8 +50,19 @@ the boundary that prevents a half-created account, order, master product or
 
 `schema.sql` is the authoritative database definition.
 
-- Identity/access: `users` references `roles`; `role_permissions` is retained
-  as schema data, while route middleware enforces the implemented permissions.
+`docs/SCHEMA.md` is **generated** from it by `npm run docs:schema` (`python3
+scripts/document-schema.py`) — no database needed, it parses the `CREATE TABLE` statements
+directly. Nothing runs it automatically, so it is stale the moment `schema.sql` changes:
+after editing the schema or adding a migration that alters it, rerun the script. Its
+preamble is hand-written and lives in the script itself, which is the part to update when a
+rule changes; the table and ERD sections are derived and must not be edited in the output.
+
+- Identity/access: `users` references `roles`, and the role name is what every
+  guard checks. There is no permission table: `permissions` and
+  `role_permissions` were seed-only data that no code consulted, so
+  `009_drop_permissions.sql` removed them rather than leave a table that reads
+  like an authorization model and is not one. Authorization is `requireRole`
+  on a mounted router — a check per role, never per capability.
   A user owns shops and carts/wishlists/orders/reviews.
 - Addresses: `locations` references `countries`. Users and shops point to an
   address. Profile changes insert a fresh location, so old order addresses stay
@@ -61,31 +72,78 @@ the boundary that prevents a half-created account, order, master product or
   holds admin-managed product facts; `attribute_values` stores its values.
   `products` is a shop's sellable listing of one master product.
 - Commercial data: `shop_purchases` snapshots wholesale quantities/prices and
-  `product_reviews` has one row per `(user_id, prod_id)`. `orders`,
-  `order_items`, and `payments` remain as inactive historical/future schema;
-  there is no checkout or order-processing API at this time.
+  `product_reviews` has one row per `(user_id, prod_id)`; `shop_reviews` does the
+  same for a shop. `orders`, `order_items` and `payments` are live: checkout
+  claims stock, writes the order and its items, records each line's platform
+  commission, and records a `pending` cash-on-delivery payment. `vendor_refunds`
+  is the ledger of what the platform paid vendors for stock it withdrew. See
+  [`ORDERS_AND_PAYMENT.md`](ORDERS_AND_PAYMENT.md) for the order flow and
+  [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md) for the money
+  rules.
 
 Foreign keys, `NOT NULL`, checks, primary keys and `NUMERIC(12,2)` protect basic
 integrity. Important PostgreSQL triggers add business rules:
 
 - protected tables cannot be hard-deleted; catalog/listing removal is a status
-  change, preserving history;
+  change, preserving history, **plus a compensating refund** — a listing removed
+  by an admin is discontinued and the vendor is paid for the stock they still
+  hold, in one transaction, with a `vendor_refunds` row as the record. See
+  [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md);
+- removing a master product refunds every shop holding a listing of it, and
+  `products.in_stock` is zeroed for the removed stock: it has been paid for, so
+  it is no longer inventory, and a restock cannot be refunded twice;
 - disabling a user disables owned shops and delivery availability; disabling a
-  shop discontinues its listings;
-- legacy order triggers remain inactive because no endpoint writes orders;
+  shop discontinues its listings. `trg_enable_user_dependents` runs the shop half
+  of that cascade back the other way, so re-enabling a user restores their shops
+  to `active`. Their listings stay discontinued: a vendor relists on purpose. The
+  same trigger deliberately does not touch `delivery_personnel`, because disabling
+  a courier sets them `unavailable`, which releases in-flight orders — returning
+  them to `available` automatically would put them back on duty without opting in;
+- `shops.active_status` accepts `active`, `disabled` and `pending`. The column
+  default stays `active` so seeded and directly inserted rows are live; the vendor
+  path writes `pending` explicitly, and only an administrator may move a shop to
+  any status. `products.in_stock` and the other status columns are unaffected;
+- order triggers are active and carry the checkout rules:
+  `trg_order_items_recalc_total` owns `orders.total_amount`;
+  `fn_guard_order_transition` allows only `pending → shipped|cancelled` and
+  `shipped → delivered|pending`; `fn_cleanup_cancelled_order` returns the stock,
+  fails the pending payment **and voids the order's platform commission** —
+  a cancelled order must not keep reporting a margin it never earned;
+  `fn_release_orders_on_personnel_unavailable` unassigns a courier's in-flight
+  orders when they go unavailable;
 - deferred category-value triggers reject an available master product lacking a
   required attribute at transaction commit;
 - `trg_verify_product_review_purchase` rejects direct SQL INSERT **and UPDATE**
   of a product review unless that customer has a delivered order containing that
-  exact listing. The API eligibility check is convenience only; the trigger is
-  the database enforcement.
+  exact listing. `trg_verify_shop_review_purchase` does the same for a
+  `shop_reviews` row against any listing from that shop. In both cases the API
+  eligibility check is convenience only; the trigger is the database enforcement.
 
 All SQL text lives under `server/src/queries/`; controllers only validate,
 authorize, sequence transactions, and choose a response. For example,
-`adminCatalogController.js` uses `adminCatalogQueries.js`; vendor, profile,
-review, role, cart, wishlist, auth and catalog use the equivalent query modules.
+`adminCatalogController.js` uses `adminCatalogQueries.js`; admin moderation uses
+`adminQueries.js`; money and refund reads use `paymentQueries.js`; shop reviews
+use `shopReviewQueries.js`; vendor, profile, review, role, cart, wishlist, auth
+and catalog use the equivalent query modules.
 All request values are bound through `$1`, `$2`, etc., never concatenated into
 SQL text.
+
+`utils/sql.js` holds `escapeLikePattern`, the single implementation of the `%`/`_`/`\`
+escaping every `ILIKE ... ESCAPE '\'` search relies on, shared by the catalog and
+admin query builders so there is only one copy to keep correct.
+
+`utils/listQuery.js` holds `parseListQuery` and `paginated`, the two halves every
+paged list shares: a closed set of filter values joined to a free-text `q`, and a
+`COUNT(*) OVER()` result turned into `{ items, total, page, limit, total_pages }`.
+Users, shops, products, payments and refunds all go through it, so a bad filter
+gets the same `400` and the same message wherever it is sent.
+
+## Which role may read which table
+
+Every read surface keys its subject on the session — no endpoint accepts a
+`user_id` or `shop_id` from the caller to decide whose data to return. The full
+table, with what each role deliberately cannot see and why, is in
+[`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md).
 
 ## Endpoint behavior and source ownership
 
@@ -96,16 +154,23 @@ data, and `409` is a business-rule or trigger conflict.
 | Route group | Controller and database behavior | Relevant browser page |
 | --- | --- | --- |
 | `POST /auth/register`, `/auth/login`, `/auth/logout`; `GET /auth/me` | `authController.js` looks up roles, hashes passwords with bcrypt, writes location/user/delivery rows atomically, signs/revokes JWT cookies. Logout increments `users.token_version`, invalidating copied older tokens. | Register/sign-in |
-| `GET /profile`; `PUT /profile` | `profileController.js` reads the user/role/location join. Update creates a location, updates only self-owned contact fields, and updates delivery vehicle data only for delivery users. | My profile |
+| `GET /profile`; `PUT /profile` | `profileController.js` reads the user/role/location join. Update creates a location, updates only self-owned contact fields, and updates delivery vehicle data only for delivery users. | Account settings |
 | `GET /products`, `/products/:id`, `/categories`, `/shops`, `/roles`, `/health` | `catalogController.js` runs read-only SQL from `queries/catalogQueries.js`. Retail product reads join listing/shop/master/category and exclude discontinued/disabled/unavailable rows. | Products/details |
 | Customer cart/wishlist endpoints | `cartController.js` and `wishlistController.js` use the session user ID, never a submitted user ID. Cart writes confirm listing availability and stock. | Cart/wishlist |
-| Vendor shops/listings/purchases | `vendorController.js` checks shop ownership from JWT. Buying locks shop/master/listing, records a wholesale price snapshot, then creates or restocks the listing atomically. A vendor may only edit retail price, seller Markdown description, and listing status; master facts are fetched from SQL. | My shops / Buy & list |
-| Admin catalog/attributes/categories/masters | `adminCatalogController.js` uses transactions plus advisory locks for catalog edits. Category required keys are stored in `category_attributes`; master values in `attribute_values`. Master updates synchronize listing name/image but intentionally leave seller descriptions alone. Delete master is a soft discontinue. | Manage catalog |
-| Product reviews | `reviewController.js` derives reviewer identity from JWT. It exposes public reviews, checks historical delivery eligibility, and upserts/deletes only the caller's row. The database trigger independently verifies purchase eligibility. New users cannot become eligible while checkout is disabled. | Product details |
+| Vendor shops/listings/purchases | `vendorController.js` checks shop ownership from JWT. Buying checks the selected shop and master, records a wholesale price snapshot, then creates or restocks the listing in one transaction. A vendor may only edit retail price, seller Markdown description, and listing status; master facts are fetched from SQL. Shop status is not accepted from this path at all: create writes `pending` and update never touches the column. | My shops / Buy & list |
+| `GET /admin/users`, `PUT /admin/users/:userId/status`, `GET /admin/shops`, `PUT /admin/shops/:shopId/status` | `adminController.js` reads paged, filtered lists from `adminQueries.js` (`COUNT(*) OVER()` plus `LIMIT`/`OFFSET`, via `utils/listQuery.js`) and moves a user or shop between statuses. A user status write also bumps `token_version`, killing that user's live sessions. Approving a pending shop is the same shop-status write with `active`. Disabling your own account is refused with 409. | Administration console |
+| `GET /admin/payments`, `GET /admin/refunds` | `paymentController.js` reads `paymentQueries.js`: every payment joined to its order and customer with that order's `platform_commission` beside it, and every `vendor_refunds` row with its shop, listing, reason and the acting administrator. Both paged and filterable from closed sets. Admin only — these are the two surfaces a vendor's own books are a slice of. | Console → Payments / Refunds |
+| `GET /vendor/payments` | `paymentController.js` returns the caller's books: sales of their own listings (`net_to_shop` per line, **without the buyer's name or email**), their wholesale purchases, refunds they have received, their shops' `earnings`, and totals. Scoped to owned shops from the JWT; no shop ID is accepted. | Vendor → Payments |
+| `GET /account/payments` | `paymentController.js` returns the caller's own payments. The platform's commission is not in the response at all, so there is nothing on the page to hide. | Account → Payment history |
+| Admin catalog/attributes/categories/masters; `PUT /admin/listings/:prodId/discontinue`; `DELETE /admin/master-products/:masterId` | `adminCatalogController.js` saves catalog edits in transactions. Category required keys are stored in `category_attributes`; master values in `attribute_values`. The product form can add a name/value attribute pair during save. Master updates synchronize listing name/image but intentionally leave seller descriptions alone. Both removals are the soft discontinue **plus** the LIFO vendor refund described in [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md), in one transaction, answering 409 if the listing was already removed. | Manage catalog / Console → Shops |
+| Product reviews; `GET /shops/:shopId/reviews`; `GET/PUT/DELETE /shops/:shopId/review` | `reviewController.js` and `shopReviewController.js` derive reviewer identity from JWT. They expose public reviews, check historical delivery eligibility, and upsert/delete only the caller's row. The database triggers independently verify purchase eligibility. A customer becomes eligible once an order containing that listing — or from that shop, for a shop review — has been delivered. | Product details / Order detail |
+| `POST /orders`; `GET /orders`, `/orders/:orderId`; `PUT /orders/:orderId/cancel` | `orderController.js` reads the session user's cart, claims each line's stock with one conditional `UPDATE` per line inside a single transaction, creates the order, its items with their per-line platform commission, a `pending` cash-on-delivery payment and a courier assignment, then empties the cart. A line that sold out mid-checkout returns `409` and rolls the whole order back. Cancel is a compare-and-set on `pending`. | Checkout / My orders |
+| `GET /delivery/deliveries`; `PUT /delivery/orders/:orderId/status` | `orderController.js` lists the courier's `pending` and `shipped` orders with their items, and moves one between statuses. Marking an order delivered also completes its cash payment, stamps `paid_at`, and credits the courier `COURIER_BASE_FEE + COURIER_RATE × total_amount` to `delivery_personnel.earnings`. The compare-and-set in the status update is what makes that happen exactly once. | Current deliveries |
 
-There are deliberately no `/orders`, `/admin/orders`, `/admin/couriers`, or
-`/delivery/orders` endpoints. Customers can browse, wishlist, add/update/remove
-cart rows, and stop there. A cart does not reserve stock or create payment data.
+There are deliberately no `/admin/orders` or `/admin/couriers` endpoints.
+Administration of orders is not a feature; a shop's own sales are visible through
+its listings, and delivery is dispatched automatically at checkout. A cart does
+not reserve stock: placing the order is what claims it.
 
 ## Catalog write sequence
 
@@ -115,11 +180,11 @@ cart rows, and stop there. A cart does not reserve stock or create payment data.
    replaces that category's `category_attributes` rows. If a new requirement is
    applied to existing masters, `default_value` fills missing values; deferred
    trigger validation blocks an incomplete available catalog.
-3. Admin calls `POST` or `PUT /admin/master-products` with core master fields
-   and `attributes: [{ attribute_id, attrib_value }]`. Required category values
-   are mandatory; optional product-specific pairs are saved in the same values
-   table. The client offers an explicit **Add attribute** entry, but the server
-   remains authoritative and validates duplicate IDs and all referenced IDs.
+3. Admin calls `POST` or `PUT /admin/master-products` with core master fields,
+   `attributes: [{ attribute_id, attrib_value }]`, and optional
+   `additional_attributes: [{ name, value }]`. Required category values are
+   mandatory. The server validates supplied IDs and creates each additional
+   attribute with its value in the same transaction.
 4. Vendor calls `GET /vendor/master-products`, sees read-only master facts,
    then `POST /vendor/listings` with only shop ID, master ID, quantity, retail
    price and seller description. Forged category/name/wholesale fields are not

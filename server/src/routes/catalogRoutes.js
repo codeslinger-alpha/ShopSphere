@@ -3,21 +3,22 @@ const {
   getProduct,
   healthCheck,
   listCategories,
+  listProductFacets,
   listProducts,
   listRoles,
   listShops,
-  listUsers,
 } = require("../controllers/catalogController");
-const { requireAuth, requireRole } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
 router.get("/health", healthCheck);
 router.get("/roles", listRoles);
 router.get("/products", listProducts);
+// Must stay above /products/:productId: Express matches in order, and the
+// literal path would otherwise be read as a product ID and rejected with a 400.
+router.get("/products/facets", listProductFacets);
 router.get("/products/:productId", getProduct);
 router.get("/categories", listCategories);
 router.get("/shops", listShops);
-router.get("/users", requireAuth, requireRole("admin"), listUsers);
 
 module.exports = router;

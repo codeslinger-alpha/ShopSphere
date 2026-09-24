@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" role="img" aria-label="Books and stationery">
+  <title>Books and stationery</title>
+  <rect width="600" height="400" fill="#2c2140" />
+  <circle cx="505" cy="72" r="130" fill="#3b2c56" />
+  <circle cx="88" cy="340" r="96" fill="#3b2c56" opacity="0.7" />
+  <g fill="none" stroke="#c9b3ff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="196" y="252" width="208" height="38" rx="10" />
+    <rect x="184" y="208" width="232" height="38" rx="10" />
+    <rect x="216" y="164" width="168" height="38" rx="10" />
+    <path d="M300 164v-34" />
+  </g>
+</svg>

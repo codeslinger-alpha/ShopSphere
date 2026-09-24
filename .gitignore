@@ -5,4 +5,8 @@ node_modules/
 client/dist/
 client/test-results/
 client/playwright-report/
+# Playwright resolves its output directory against the working directory, so a
+# run started from the repository root writes here rather than under client/.
+test-results/
+playwright-report/
 *.log

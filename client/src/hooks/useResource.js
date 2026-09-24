@@ -22,6 +22,9 @@ export function useResource(path) {
   return {
     data: current ? result.data : null,
     error: current ? result.error : "",
+    // Distinguishes "still loading" from "loaded and empty", which matters when
+    // a filter legitimately matches nothing. No path means nothing to load.
+    isLoading: Boolean(path) && !current,
     reload: () => setVersion((v) => v + 1),
   };
 }

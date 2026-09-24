@@ -9,7 +9,9 @@ async function mockApi(page, currentUser = user) {
         if (path === "/api/auth/me") return route.fulfill({ status: currentUser ? 200 : 401, json: currentUser ? { user: currentUser } : { message: "Authentication is required." } });
         if (path === "/api/cart") return route.fulfill({ json: [item] });
         if (path === "/api/wishlist") return route.fulfill({ json: [{ ...item, prod_id: 2, name: "Wishlist watch" }] });
-        if (path === "/api/products") return route.fulfill({ json: [{ ...item, in_stock: 0 }] });
+        if (path === "/api/categories") return route.fulfill({ json: [] });
+        if (path === "/api/products/facets") return route.fulfill({ json: [] });
+        if (path === "/api/products") return route.fulfill({ json: { items: [{ ...item, in_stock: 0 }], total: 1, page: 1, limit: 24, total_pages: 1 } });
         return route.fulfill({ status: 404, json: { message: "Route not found." } });
     });
 }

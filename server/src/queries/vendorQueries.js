@@ -13,23 +13,26 @@ const LIST_OWNED_SHOPS = `
   ORDER BY s.shop_id
 `;
 
-const LOCK_OWNED_SHOP = `
+const OWNED_SHOP = `
   SELECT shop_id
   FROM shops
   WHERE shop_id = $1 AND owner = $2
-  FOR UPDATE
 `;
+// active_status is deliberately absent: shop status is an administrator-only
+// field. A vendor must not be able to approve their own shop, nor to undo a ban.
 const UPDATE_SHOP = `
   UPDATE shops
   SET name = $1, description = $2, phone_numbers = $3, logo = $4,
-      cover_photo = $5, address = $6, active_status = $7
-  WHERE shop_id = $8 AND owner = $9
+      cover_photo = $5, address = $6
+  WHERE shop_id = $7 AND owner = $8
   RETURNING *
 `;
+// A new shop waits for an administrator. It is invisible to the storefront
+// because every catalog query requires active_status = 'active'.
 const CREATE_SHOP = `
   INSERT INTO shops (
     name, description, phone_numbers, logo, cover_photo, address, active_status, owner
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
   RETURNING *
 `;
 
@@ -55,25 +58,22 @@ const LIST_OWNED_PURCHASES = `
   ORDER BY sp.purchase_id DESC
 `;
 
-const LOCK_ACTIVE_OWNED_SHOP = `
+const ACTIVE_OWNED_SHOP = `
   SELECT shop_id
   FROM shops
   WHERE shop_id = $1 AND owner = $2 AND active_status = 'active'
-  FOR UPDATE
 `;
-const LOCK_AVAILABLE_MASTER = `
+const AVAILABLE_MASTER = `
   SELECT *
   FROM master_products
   WHERE master_prod_id = $1 AND active_status = 'available'
-  FOR SHARE
 `;
-const LOCK_LISTING_FOR_MASTER = `
+const LISTING_FOR_MASTER = `
   SELECT prod_id, in_stock
   FROM products
   WHERE shop_id = $1 AND master_prod_id = $2
   ORDER BY prod_id
   LIMIT 1
-  FOR UPDATE
 `;
 const CREATE_PURCHASE = `
   INSERT INTO shop_purchases (
@@ -102,20 +102,17 @@ const UPDATE_OWNED_LISTING = `
     AND p.prod_id = $5
   RETURNING p.*
 `;
-const LOCK_VENDOR_CATALOG = `SELECT pg_advisory_xact_lock(216, 603)`;
-
 module.exports = {
+  ACTIVE_OWNED_SHOP,
+  AVAILABLE_MASTER,
   CREATE_LISTING,
   CREATE_PURCHASE,
   CREATE_SHOP,
   LIST_OWNED_LISTINGS,
   LIST_OWNED_PURCHASES,
   LIST_OWNED_SHOPS,
-  LOCK_ACTIVE_OWNED_SHOP,
-  LOCK_AVAILABLE_MASTER,
-  LOCK_LISTING_FOR_MASTER,
-  LOCK_OWNED_SHOP,
-  LOCK_VENDOR_CATALOG,
+  LISTING_FOR_MASTER,
+  OWNED_SHOP,
   RESTOCK_LISTING,
   UPDATE_OWNED_LISTING,
   UPDATE_SHOP,

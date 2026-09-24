@@ -19,6 +19,10 @@ For a **new empty database**, run `npm run db:init`. For an **existing database*
 Tests need PostgreSQL schema-creation permission; browser tests also need Chromium
 (`npm exec --workspace client -- playwright install chromium`).
 
+`npm run docs:schema` rebuilds [docs/SCHEMA.md](docs/SCHEMA.md) from `schema.sql`. It needs
+no database, and it does not run itself — rerun it after any schema change, or the
+reference goes stale silently.
+
 This is one npm workspace with a root lockfile and dependency installation.
 The root, client and server `package.json` files have distinct purposes and are
 required. Run installation and project commands from the root.

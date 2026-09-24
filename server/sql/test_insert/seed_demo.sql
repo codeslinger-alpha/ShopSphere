@@ -25,27 +25,10 @@ WHERE NOT EXISTS (
     SELECT 1 FROM locations l WHERE l.street_address = v.street AND l.country_id = c.country_id
 );
 
-INSERT INTO permissions (permission_id, permission_name, description)
-VALUES
-    ('demo.cart', 'Demo: manage own cart', 'Customer cart access'),
-    ('demo.wishlist', 'Demo: manage own wishlist', 'Customer wishlist access'),
-    ('demo.orders', 'Demo: view own orders', 'Customer order access'),
-    ('demo.inventory', 'Demo: manage own inventory', 'Vendor shop and inventory access'),
-    ('demo.deliveries', 'Demo: manage assigned deliveries', 'Delivery personnel access'),
-    ('demo.users', 'Demo: manage users', 'Administrator user access'),
-    ('demo.catalog', 'Demo: manage catalog', 'Administrator category and master product access')
-ON CONFLICT DO NOTHING;
-
--- These illustrate the schema; current Express middleware checks role names.
-INSERT INTO role_permissions (role_id, permission_id)
-SELECT r.role_id, v.permission_id
-FROM (VALUES
-    ('customer', 'demo.cart'), ('customer', 'demo.wishlist'), ('customer', 'demo.orders'),
-    ('vendor', 'demo.inventory'), ('delivery', 'demo.deliveries'),
-    ('admin', 'demo.users'), ('admin', 'demo.catalog')
-) AS v(role_name, permission_id)
-JOIN roles r ON r.role_name = v.role_name
-ON CONFLICT DO NOTHING;
+-- No permission or grant rows: those tables are gone (see
+-- sql/migrations/009_drop_permissions.sql). Authorization here is
+-- requireRole(roleName) on a mounted router, and the seed only has to create the
+-- users that hold those roles.
 
 -- 2. Six accounts: two customers/vendors allow ownership-isolation demonstrations.
 -- Each hash uses its own bcrypt salt, with cost 12.
@@ -254,3 +237,41 @@ JOIN products p ON p.prod_id = oi.prod_id
 WHERE u.email = 'customer@shopsphere.test' AND o.order_status = 'delivered'
   AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
 ON CONFLICT DO NOTHING;
+
+-- 8. The money columns the placement and delivery rules fill.
+-- The commission and courier-pay rules were written after this file was, so a
+-- seeded order would otherwise show the admin payments screen a column of zeroes
+-- and the courier a balance that never moved. The figures below are exactly what
+-- placing and delivering these orders would have produced.
+--
+-- The rates mirror PLATFORM_COMMISSION_RATE, COURIER_BASE_FEE and COURIER_RATE in
+-- src/queries/orderQueries.js — the one place they are defined. They are repeated
+-- here because a .sql file cannot import a JavaScript constant, and changing a
+-- rate means changing both.
+--
+-- Scoped to the seed's own orders by created_at, so this never rewrites a real
+-- order. Cancelled orders are skipped: fn_cleanup_cancelled_order zeroes their
+-- commission on purpose.
+UPDATE order_items oi
+SET platform_commission = ROUND(oi.quantity * oi.unit_price * 0.05, 2)
+FROM orders o
+WHERE o.order_id = oi.order_id
+  AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
+  AND o.order_status <> 'cancelled';
+
+-- Summed from the lines, the way RECORD_PLATFORM_COMMISSION does it at placement.
+UPDATE orders o
+SET platform_commission = (
+    SELECT COALESCE(SUM(oi.platform_commission), 0)
+    FROM order_items oi WHERE oi.order_id = o.order_id
+)
+WHERE o.created_at = TIMESTAMP '2026-09-01 10:00:00'
+  AND o.order_status <> 'cancelled';
+
+UPDATE delivery_personnel d
+SET earnings = 3 + ROUND(0.02 * o.total_amount, 2)
+FROM orders o
+WHERE o.delivery_person_id = d.delivery_person_id
+  AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
+  AND o.order_status = 'delivered';
+

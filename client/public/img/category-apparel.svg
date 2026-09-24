@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" role="img" aria-label="Clothing and apparel">
+  <title>Clothing and apparel</title>
+  <rect width="600" height="400" fill="#3a2130" />
+  <circle cx="505" cy="72" r="130" fill="#4d2c40" />
+  <circle cx="88" cy="340" r="96" fill="#4d2c40" opacity="0.7" />
+  <g fill="none" stroke="#ffabcd" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M240 128h120l62 40-34 50-28-18v104H240V200l-28 18-34-50z" />
+    <path d="M262 130c0 26 18 44 38 44s38-18 38-44" />
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" role="img" aria-label="Toys and games">
+  <title>Toys and games</title>
+  <rect width="600" height="400" fill="#3b2711" />
+  <circle cx="505" cy="72" r="130" fill="#4e3416" />
+  <circle cx="88" cy="340" r="96" fill="#4e3416" opacity="0.7" />
+  <g fill="none" stroke="#ffc266" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="196" y="216" width="86" height="86" rx="12" />
+    <rect x="290" y="216" width="86" height="86" rx="12" />
+    <rect x="243" y="130" width="86" height="86" rx="12" />
+  </g>
+</svg>

@@ -4,32 +4,24 @@ import { useResource, useTask } from "../hooks/useResource";
 import { Feedback, MarkdownField } from "../components/FormFields";
 function MasterEditor({ product, metadata, busy, onSave }) {
   const [category, setCategory] = useState(String(product.category_id || ""));
-  const [optionalAttributeIds, setOptionalAttributeIds] = useState(() =>
-    (product.attributes || [])
-      .map((attribute) => attribute.attribute_id)
-      .filter(
-        (attributeId) =>
-          !metadata.categories
-            .find((item) => item.category_id === product.category_id)
-            ?.attribute_ids.includes(attributeId),
-      ),
-  );
+  const [additional, setAdditional] = useState([]);
   const required =
     metadata.categories.find((c) => String(c.category_id) === category)
       ?.attribute_ids || [];
+  const existing = (product.attributes || []).map(
+    (attribute) => attribute.attribute_id,
+  );
+  const optional = existing.filter(
+    (attributeId) => !required.includes(attributeId),
+  );
   const attributeValue = (attributeId) =>
     product.attributes?.find(
       (attribute) => attribute.attribute_id === attributeId,
     )?.attrib_value || "";
-  const optionalChoices = metadata.attributes.filter(
-    (attribute) =>
-      !required.includes(attribute.attribute_id) &&
-      !optionalAttributeIds.includes(attribute.attribute_id),
-  );
   async function submit(e) {
     e.preventDefault();
     const b = Object.fromEntries(new FormData(e.currentTarget));
-    const attributeIds = [...new Set([...required, ...optionalAttributeIds])];
+    const attributeIds = [...new Set([...required, ...existing])];
     const attributes = attributeIds
       .filter((attributeId) => b[`attribute:${attributeId}`]?.trim())
       .map((attributeId) => ({
@@ -37,22 +29,10 @@ function MasterEditor({ product, metadata, busy, onSave }) {
         attrib_value: b[`attribute:${attributeId}`],
       }));
     for (const attributeId of attributeIds) delete b[`attribute:${attributeId}`];
-    await onSave({ ...b, attributes });
-  }
-  function chooseOptionalAttribute(e) {
-    const attributeId = Number(e.target.value);
-    if (!attributeId || optionalAttributeIds.includes(attributeId)) return;
-    setOptionalAttributeIds((ids) => [...ids, attributeId]);
+    await onSave({ ...b, attributes, additional_attributes: additional });
   }
   function changeCategory(e) {
-    const categoryId = e.target.value;
-    const nextRequired =
-      metadata.categories.find((item) => String(item.category_id) === categoryId)
-        ?.attribute_ids || [];
-    setOptionalAttributeIds((ids) =>
-      ids.filter((attributeId) => !nextRequired.includes(attributeId)),
-    );
-    setCategory(categoryId);
+    setCategory(e.target.value);
   }
   function AttributeInput({ attributeId, isRequired = false }) {
     const attribute = metadata.attributes.find(
@@ -71,18 +51,6 @@ function MasterEditor({ product, metadata, busy, onSave }) {
             required={isRequired}
           />
         </label>
-        {!isRequired && (
-          <button
-            type="button"
-            onClick={() =>
-              setOptionalAttributeIds((ids) =>
-                ids.filter((id) => id !== attribute.attribute_id),
-              )
-            }
-          >
-            Remove attribute
-          </button>
-        )}
       </div>
     );
   }
@@ -162,28 +130,68 @@ function MasterEditor({ product, metadata, busy, onSave }) {
         </label>
         <h3>Attribute values</h3>
         <p>
-          Category attributes are required. Add optional product-specific
-          attributes as key/value entries without changing category filters.
+          Category attributes are required. Add product-specific attributes
+          below.
         </p>
         {required.map((attributeId) => (
           <AttributeInput key={attributeId} attributeId={attributeId} isRequired />
         ))}
-        {optionalAttributeIds.map((attributeId) => (
+        {optional.map((attributeId) => (
           <AttributeInput key={attributeId} attributeId={attributeId} />
         ))}
-        {optionalChoices.length > 0 && (
-          <label>
-            Add attribute
-            <select defaultValue="" onChange={chooseOptionalAttribute}>
-              <option value="">Choose an optional attribute</option>
-              {optionalChoices.map((attribute) => (
-                <option key={attribute.attribute_id} value={attribute.attribute_id}>
-                  {attribute.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        <h3>Additional attributes</h3>
+        {additional.map((attribute, index) => (
+          <div className="attribute-row" key={index}>
+            <label>
+              Name
+              <input
+                value={attribute.name}
+                maxLength="100"
+                onChange={(e) =>
+                  setAdditional((items) =>
+                    items.map((item, i) =>
+                      i === index ? { ...item, name: e.target.value } : item,
+                    ),
+                  )
+                }
+                required
+              />
+            </label>
+            <label>
+              Value
+              <input
+                value={attribute.value}
+                maxLength="500"
+                onChange={(e) =>
+                  setAdditional((items) =>
+                    items.map((item, i) =>
+                      i === index ? { ...item, value: e.target.value } : item,
+                    ),
+                  )
+                }
+                required
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                setAdditional((items) =>
+                  items.filter((_, i) => i !== index),
+                )
+              }
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            setAdditional((items) => [...items, { name: "", value: "" }])
+          }
+        >
+          Add attribute
+        </button>
         <button className="primary">Save master product</button>
       </fieldset>
     </form>
@@ -284,7 +292,11 @@ export default function AdminCatalogPage() {
   const [tab, setTab] = useState("products"),
     [product, setProduct] = useState({}),
     [category, setCategory] = useState({}),
-    [revision, setRevision] = useState(0);
+    [revision, setRevision] = useState(0),
+    // Which master product is one click away from being discontinued. That now
+    // refunds every vendor holding stock of it, which cannot be undone, so it
+    // takes a second deliberate click rather than a single slip.
+    [confirming, setConfirming] = useState(null);
   async function write(path, method, body) {
     const ok = await task.run(() =>
       api(path, { method, body: body ? JSON.stringify(body) : undefined }),
@@ -339,17 +351,38 @@ export default function AdminCatalogPage() {
                       </p>
                     ))}
                     <button onClick={() => setProduct(p)}>Edit master</button>{" "}
-                    <button
-                      disabled={task.busy || p.active_status === "discontinued"}
-                      onClick={() =>
-                        write(
-                          `/admin/master-products/${p.master_prod_id}`,
-                          "DELETE",
-                        )
-                      }
-                    >
-                      Delete (discontinue)
-                    </button>
+                    {p.active_status === "discontinued" ? (
+                      <button disabled>Discontinued</button>
+                    ) : confirming === p.master_prod_id ? (
+                      <>
+                        <button
+                          className="danger"
+                          disabled={task.busy}
+                          onClick={async () => {
+                            await write(
+                              `/admin/master-products/${p.master_prod_id}`,
+                              "DELETE",
+                            );
+                            setConfirming(null);
+                          }}
+                        >
+                          Confirm: discontinue and refund every vendor holding it
+                        </button>{" "}
+                        <button
+                          disabled={task.busy}
+                          onClick={() => setConfirming(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        disabled={task.busy}
+                        onClick={() => setConfirming(p.master_prod_id)}
+                      >
+                        Delete (discontinue)
+                      </button>
+                    )}
                   </article>
                 ))}
               </>

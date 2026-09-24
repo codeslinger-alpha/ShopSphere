@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" role="img" aria-label="Other categories">
+  <title>Other categories</title>
+  <!-- The fallback for a category nobody has drawn art for yet. Deliberately
+       neutral: it should read as "a category", not as a wrong guess. -->
+  <rect width="600" height="400" fill="#21302a" />
+  <circle cx="505" cy="72" r="130" fill="#2c4038" />
+  <circle cx="88" cy="340" r="96" fill="#2c4038" opacity="0.7" />
+  <g fill="none" stroke="#b6ccc0" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M300 108 452 178v128L300 376 148 306V178z" />
+    <path d="M148 178 300 248l152-70" />
+    <path d="M300 248v128" />
+  </g>
+</svg>

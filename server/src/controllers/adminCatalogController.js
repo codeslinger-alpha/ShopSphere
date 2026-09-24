@@ -91,7 +91,6 @@ async function saveCategory(req, res) {
   if (new Set(required.map((a) => a.id)).size !== required.length)
     v.fail(400, "Choose each required attribute once.");
   const category = await transaction(async (c) => {
-    await c.query(q.LOCK_CATALOG);
     if (
       categoryId &&
       !(
@@ -128,7 +127,6 @@ async function saveCategory(req, res) {
 async function deleteCategory(req, res) {
   const id = v.id(req.params.categoryId);
   await transaction(async (c) => {
-    await c.query(q.LOCK_CATALOG);
     if (
       (
         await c.query(
@@ -168,15 +166,21 @@ async function saveMaster(req, res) {
   if (!["available", "discontinued"].includes(status))
     v.fail(400, "Choose a valid product status.");
   if (!Array.isArray(b.attributes) || b.attributes.length > 100)
-    v.fail(400, "Attributes must be an array of at most 100 entries.");
+    v.fail(400, "Existing attributes must be an array of at most 100 entries.");
+  const additionalBody = b.additional_attributes ?? [];
+  if (!Array.isArray(additionalBody) || additionalBody.length > 100)
+    v.fail(400, "Additional attributes must be an array of at most 100 entries.");
   const attributes = b.attributes.map((a) => [
     v.id(a?.attribute_id, "Attribute"),
     v.string(a?.attrib_value, "Attribute value", 500, true),
   ]);
   if (new Set(attributes.map((a) => a[0])).size !== attributes.length)
     v.fail(400, "Each attribute may have only one value.");
+  const additional = additionalBody.map((a) => [
+    v.string(a?.name, "Additional attribute name", 100, true),
+    v.string(a?.value, "Additional attribute value", 500, true),
+  ]);
   const master = await transaction(async (c) => {
-    await c.query(q.LOCK_CATALOG);
     const result = id
       ? await c.query(
         q.UPDATE_MASTER,
@@ -196,7 +200,15 @@ async function saveMaster(req, res) {
         q.CREATE_MASTER_VALUE,
         [master.master_prod_id, attribute, value],
       );
-    // Listing identity and images always follow the master; seller descriptions stay independent.
+    for (const [name, value] of additional) {
+      const attribute = (await c.query(q.CREATE_ATTRIBUTE, [name, ""]))
+        .rows[0];
+      await c.query(q.CREATE_MASTER_VALUE, [
+        master.master_prod_id,
+        attribute.attribute_id,
+        value,
+      ]);
+    }
     await c.query(
       q.SYNC_MASTER_LISTINGS,
       [master.name, master.images, master.master_prod_id],
@@ -205,16 +217,126 @@ async function saveMaster(req, res) {
   });
   res.status(id ? 200 : 201).json({ message: "Master product saved.", master });
 }
-async function deleteMaster(req, res) {
-  const result = await pool.query(
-    q.DISCONTINUE_MASTER,
-    [v.id(req.params.masterId)],
-  );
-  if (!result.rowCount) v.fail(404, "Master product not found.");
+// Pay a vendor for the stock they still hold of one listing.
+//
+// Both removal paths go through here — removing a listing, and removing a master
+// product with all its listings — so the LIFO rule and the earnings credit
+// cannot drift apart between the two.
+//
+// The caller must already have claimed the listing (the guarded UPDATE in
+// DISCONTINUE_LISTING, or the FOR UPDATE in MASTER_LISTINGS_WITH_STOCK). That
+// matters for more than tidiness: it holds the row lock, so in_stock cannot move
+// between this reading it and PAID_OUT_LISTING zeroing it.
+async function refundListing(c, listing, adminId, reason) {
+  const attribution = (await c.query(q.REFUND_ATTRIBUTION, [[listing.prod_id]]))
+    .rows[0];
+  if (!attribution)
+    v.fail(409, "That listing disappeared before it could be refunded.");
+  const refund = (
+    await c.query(q.CREATE_VENDOR_REFUND, [
+      listing.shop_id,
+      listing.prod_id,
+      listing.master_prod_id,
+      attribution.units,
+      attribution.amount,
+      reason,
+      adminId,
+    ])
+  ).rows[0];
+  // A listing can legitimately be out of stock, which refunds nothing and is not
+  // an error — the removal still happened and the ledger row records it.
+  if (attribution.units > 0)
+    await c.query(q.CREDIT_SHOP_EARNINGS, [
+      listing.shop_id,
+      attribution.amount,
+    ]);
+  return refund;
+}
+
+async function removeListing(req, res) {
+  const prodId = v.id(req.params.prodId);
+  const refund = await transaction(async (c) => {
+    const listing = (await c.query(q.DISCONTINUE_LISTING, [prodId])).rows[0];
+    if (!listing) {
+      // Two different refusals, and the difference is the whole point: an
+      // unknown id is a 404, and an already-removed listing is a 409 that pays
+      // nothing. Without this the second click would refund the vendor again.
+      if (!(await c.query(q.LISTING_BY_ID, [prodId])).rowCount)
+        v.fail(404, "Listing not found.");
+      v.fail(409, "That listing has already been removed.");
+    }
+    const paid = await refundListing(
+      c,
+      listing,
+      req.user.user_id,
+      "admin_removal",
+    );
+    await c.query(q.PAID_OUT_LISTING, [[prodId]]);
+    return paid;
+  });
   res.json({
-    message: "Master product discontinued. Purchase history is preserved.",
+    message:
+      refund.units > 0
+        ? `Listing removed. $${Number(refund.amount).toFixed(2)} refunded to the vendor.`
+        : "Listing removed. It held no stock, so there was nothing to refund.",
+    refund,
   });
 }
+
+async function listShopListings(req, res) {
+  const shopId = v.id(req.params.shopId);
+  const listings = (await pool.query(q.LIST_SHOP_LISTINGS, [shopId])).rows;
+  if (!listings.length) return res.json([]);
+  const attribution = (
+    await pool.query(q.REFUND_ATTRIBUTION, [
+      listings.map((listing) => listing.prod_id),
+    ])
+  ).rows;
+  const refundByListing = new Map(
+    attribution.map((row) => [row.prod_id, row]),
+  );
+  res.json(
+    listings.map((listing) => ({
+      ...listing,
+      refund: refundByListing.get(listing.prod_id) ?? null,
+    })),
+  );
+}
+
+async function deleteMaster(req, res) {
+  const masterId = v.id(req.params.masterId);
+  const result = await transaction(async (c) => {
+    if (!(await c.query(q.DISCONTINUE_MASTER, [masterId])).rowCount)
+      v.fail(404, "Master product not found.");
+    // Only listings that still hold stock need compensating, and in_stock rather
+    // than discontinued decides that. A listing the vendor retired themselves
+    // has already been discontinued and was never paid for its stock; the master
+    // going away strands that stock just the same, so it is refunded here too.
+    // Re-running the removal finds nothing left to pay, which is what makes this
+    // safe to call twice.
+    const withStock = (
+      await c.query(q.MASTER_LISTINGS_WITH_STOCK, [masterId])
+    ).rows;
+    const refunds = [];
+    for (const listing of withStock)
+      refunds.push(
+        await refundListing(c, listing, req.user.user_id, "admin_removal"),
+      );
+    // After the attributions, never before: it zeroes the in_stock they read.
+    await c.query(q.REMOVE_MASTER_LISTINGS, [masterId]);
+    return refunds;
+  });
+  const total = result.reduce((sum, refund) => sum + Number(refund.amount), 0);
+  res.json({
+    message:
+      result.length > 0
+        ? `Master product discontinued. $${total.toFixed(2)} refunded across ${result.length} listing${result.length === 1 ? "" : "s"}. Purchase history is preserved.`
+        : "Master product discontinued. No remaining stock was held, so there was nothing to refund. Purchase history is preserved.",
+    refunds: result,
+    total,
+  });
+}
+
 module.exports = {
   listMasters,
   availableMasters,
@@ -224,4 +346,6 @@ module.exports = {
   deleteCategory,
   saveMaster,
   deleteMaster,
+  removeListing,
+  listShopListings,
 };

@@ -52,16 +52,24 @@ function ShopEditor({ shop, onSave, busy }) {
         </label>
         <MarkdownField value={shop.description} />
         <AddressFields value={shop} />
-        <label>
-          Status
-          <select
-            name="active_status"
-            defaultValue={shop.active_status || "active"}
-          >
-            <option value="active">Active</option>
-            <option value="disabled">Disabled</option>
-          </select>
-        </label>
+        {/* Shop status belongs to the administrator. The server ignores it from
+            this form, so it is reported here rather than offered as a choice. */}
+        <p className="shop-status">
+          {shop.shop_id ? (
+            <>
+              Status:{" "}
+              <span className={`status-pill status-${shop.active_status}`}>
+                {shop.active_status}
+              </span>
+              {shop.active_status === "pending" &&
+                " — waiting for an administrator to approve this shop before shoppers can see it."}
+              {shop.active_status === "disabled" &&
+                " — an administrator has disabled this shop, so its listings are not on sale. They have to restore it."}
+            </>
+          ) : (
+            "A new shop goes to an administrator for approval and stays hidden from shoppers until it is approved."
+          )}
+        </p>
         <button className="primary">Save shop</button>
       </fieldset>
     </form>
@@ -108,6 +116,224 @@ function ListingEditor({ listing, onSave, busy }) {
     </form>
   );
 }
+// The vendor's books: what came in, what went out, what was refunded, and what
+// the platform is holding for them.
+//
+// The headline figures come from the server's own totals rather than from adding
+// up the tables below. Those tables are not paginated, but they are the whole
+// history, and a screen that sums whatever it happens to be showing would start
+// disagreeing with itself the moment either changed.
+function VendorPayments() {
+  const books = useResource("/vendor/payments");
+
+  if (books.isLoading) return <p role="status">Loading your books…</p>;
+  if (books.error)
+    return (
+      <p className="error" role="alert">
+        {books.error}
+      </p>
+    );
+  if (!books.data) return null;
+
+  const { sales, purchases, refunds, shops, totals } = books.data;
+  const money = (value) => `$${value}`;
+
+  return (
+    <>
+      <section className="panel">
+        <h2>The balance</h2>
+        <dl className="order-facts">
+          <div>
+            <dt>Owed to you</dt>
+            <dd>
+              {money(totals.earnings_balance)}
+              <br />
+              <span className="muted">
+                Refunds the platform paid you for removed stock. It is a running
+                balance, not money transferred.
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>Sales</dt>
+            <dd>
+              {money(totals.gross_sales)}
+              <br />
+              <span className="muted">
+                Less {money(totals.commission_paid)} platform commission ={" "}
+                {money(totals.net_sales)} net. Cancelled orders are excluded.
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>Wholesale spend</dt>
+            <dd>
+              {money(totals.wholesale_spend)}
+              <br />
+              <span className="muted">What you paid for the stock you bought.</span>
+            </dd>
+          </div>
+          <div>
+            <dt>Refunded to you</dt>
+            <dd>
+              {money(totals.refunds_received)}
+              <br />
+              <span className="muted">
+                For stock the platform removed from sale.
+              </span>
+            </dd>
+          </div>
+        </dl>
+        {shops.map((shop) => (
+          <p key={shop.shop_id} className="muted">
+            {shop.name}: {money(shop.earnings)} ·{" "}
+            <span className={`status-pill status-${shop.active_status}`}>
+              {shop.active_status}
+            </span>
+          </p>
+        ))}
+      </section>
+
+      <h2>Sales</h2>
+      {sales.length === 0 ? (
+        <p className="empty-state">
+          Nothing has sold yet. Sales of your listings appear here as customers
+          order them.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Order / date</th>
+                <th>Shop / listing</th>
+                <th>Quantity</th>
+                <th>Unit price</th>
+                <th>Subtotal</th>
+                <th>Commission</th>
+                <th>Net to you</th>
+                <th>Order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sales.map((sale) => (
+                <tr key={`${sale.order_id}:${sale.prod_id}`}>
+                  <td>
+                    #{sale.order_id}
+                    <br />
+                    <span className="muted">
+                      {new Date(sale.created_at).toLocaleDateString()}
+                    </span>
+                  </td>
+                  <td>
+                    {sale.listing_name}
+                    <br />
+                    <span className="muted">{sale.shop_name}</span>
+                  </td>
+                  <td>{sale.quantity}</td>
+                  <td>{money(sale.unit_price)}</td>
+                  <td>{money(sale.subtotal)}</td>
+                  <td>{money(sale.platform_commission)}</td>
+                  <td>{money(sale.net_to_shop)}</td>
+                  <td>
+                    <span className={`status-pill status-${sale.order_status}`}>
+                      {sale.order_status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h2>Wholesale purchases</h2>
+      {purchases.length === 0 ? (
+        <p className="empty-state">You have not bought any stock yet.</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID / date</th>
+                <th>Shop / product</th>
+                <th>Quantity</th>
+                <th>Unit cost</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {purchases.map((purchase) => (
+                <tr key={purchase.purchase_id}>
+                  <td>
+                    {purchase.purchase_id} /{" "}
+                    {new Date(purchase.purchased_at).toLocaleDateString()}
+                  </td>
+                  <td>
+                    {purchase.shop_name} / {purchase.name}
+                  </td>
+                  <td>{purchase.quantity}</td>
+                  <td>{money(purchase.wholesale_unit_price)}</td>
+                  <td>{money(purchase.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h2>Refunds</h2>
+      {refunds.length === 0 ? (
+        <p className="empty-state">
+          No stock of yours has been removed by an administrator, so there is
+          nothing to refund.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Refund / date</th>
+                <th>Shop / listing</th>
+                <th>Units</th>
+                <th>Unit amount</th>
+                <th>Amount</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {refunds.map((refund) => (
+                <tr key={refund.refund_id}>
+                  <td>
+                    #{refund.refund_id}
+                    <br />
+                    <span className="muted">
+                      {new Date(refund.created_at).toLocaleDateString()}
+                    </span>
+                  </td>
+                  <td>
+                    {refund.listing_name}
+                    <br />
+                    <span className="muted">{refund.shop_name}</span>
+                  </td>
+                  <td>{refund.units}</td>
+                  <td>{refund.unit_amount ? money(refund.unit_amount) : "—"}</td>
+                  <td>{money(refund.amount)}</td>
+                  <td>
+                    {refund.reason === "admin_removal"
+                      ? "Removed by an administrator"
+                      : "Shop closed"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function VendorPage({ page }) {
   const shops = useResource("/vendor/shops"),
     masters = useResource("/vendor/master-products"),
@@ -128,10 +354,17 @@ export default function VendorPage({ page }) {
   }
   return (
     <main className="content">
-      <h1>{page === "shops" ? "My shops" : "Buy and list products"}</h1>
+      <h1>
+        {page === "shops"
+          ? "My shops"
+          : page === "payments"
+            ? "Payments"
+            : "Buy and list products"}
+      </h1>
       <nav className="tabs">
         <Link to="/vendor/shops">My shops</Link>
         <Link to="/vendor/inventory">Inventory and purchases</Link>
+        <Link to="/vendor/payments">Payments</Link>
       </nav>
       <Feedback
         error={
@@ -143,7 +376,9 @@ export default function VendorPage({ page }) {
         }
         message={task.message}
       />
-      {page === "shops" ? (
+      {page === "payments" ? (
+        <VendorPayments />
+      ) : page === "shops" ? (
         <div className="workspace-grid">
           <section>
             <button onClick={() => setShop({})}>New shop</button>
@@ -152,7 +387,10 @@ export default function VendorPage({ page }) {
                 <div>
                   <h2>{s.name}</h2>
                   <p>
-                    {s.active_status} · {s.city} · Earnings {s.earnings}
+                    <span className={`status-pill status-${s.active_status}`}>
+                      {s.active_status}
+                    </span>{" "}
+                    · {s.city} · Earnings {s.earnings}
                   </p>
                   <p>
                     ID {s.shop_id} · Owner {s.owner} · Created{" "}

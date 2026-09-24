@@ -21,7 +21,7 @@ export default function ProfilePage() {
   }
   return (
     <main className="content narrow">
-      <h1>My profile</h1>
+      <h1>Account settings</h1>
       <Feedback error={task.error || resource.error} message={task.message} />
       {p ? (
         <>
@@ -52,7 +52,7 @@ export default function ProfilePage() {
                 />
               </label>
               <ContactFields value={p} delivery={user.role === "delivery"} />
-              <button className="primary">Save profile</button>
+              <button className="primary">Save changes</button>
             </fieldset>
           </form>
           <h2>Account information</h2>
@@ -77,8 +77,10 @@ export default function ProfilePage() {
             )}
           </dl>
           <p className="muted">
-            IDs, roles, points, earnings and timestamps are maintained by the
-            system.
+            ID, role, status and creation date are set when the account is made
+            and are not editable here. Points are recorded but no longer earned;
+            earnings shown for delivery personnel come from completed
+            deliveries.
           </p>
         </>
       ) : (

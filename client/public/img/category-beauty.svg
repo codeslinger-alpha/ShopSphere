@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" role="img" aria-label="Health and beauty">
+  <title>Health and beauty</title>
+  <rect width="600" height="400" fill="#38222f" />
+  <circle cx="505" cy="72" r="130" fill="#4b2e3f" />
+  <circle cx="88" cy="340" r="96" fill="#4b2e3f" opacity="0.7" />
+  <g fill="none" stroke="#f6b0dd" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="266" y="176" width="64" height="128" rx="16" />
+    <path d="M282 176v-24h32v24" />
+    <path d="M282 148h-8v-16h44v16h-8" />
+    <path d="M404 116l10 26 26 10-26 10-10 26-10-26-26-10 26-10z" />
+  </g>
+</svg>

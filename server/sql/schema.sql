@@ -1,10 +1,6 @@
 /*
 descriptions should support markdown formatting
 */
-/*
-To-do:
-Process product compensation to shop owner on removal of product by  admin
-*/
 --To drop everything, run:
 /* DROP SCHEMA public CASCADE;
 CREATE SCHEMA public; */
@@ -27,16 +23,12 @@ create table roles(
     role_name VARCHAR not null UNIQUE,
     description TEXT default null
 );
-create table permissions(
-    permission_id VARCHAR(50) PRIMARY KEY,
-    permission_name VARCHAR not null UNIQUE,
-    description TEXT default null
-);
-create table role_permissions(
-    role_id INT REFERENCES roles(role_id) on delete cascade not null ,
-    permission_id VARCHAR(50) REFERENCES permissions(permission_id) on delete cascade not null ,
-    PRIMARY KEY(role_id,permission_id)
-);
+-- There is deliberately no permissions/role_permissions pair here. They existed
+-- as seed-only data that no code ever consulted: authorization is
+-- requireRole(roleName) on a mounted router, which is a check per role and never
+-- per capability. A table that looks like an authorization model and is not one
+-- is worse than no table at all, so 009_drop_permissions.sql removes them and the
+-- grants they held.
 --raise exception when deleting  from users
 create table users
 (
@@ -63,7 +55,7 @@ create table shops(
     description TEXT,
     earnings decimal default 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    active_status varchar check(active_status in ('active','disabled')) default 'active',--when disabled,call a trigger to set product(discontinued) to true   
+    active_status varchar check(active_status in ('active','disabled','pending')) default 'active',--'pending' until an administrator approves the shop; when disabled,call a trigger to set product(discontinued) to true   --kept 'active' by default so seeded data and direct inserts stay live; the vendor path writes 'pending' explicitly
     phone_numbers VARCHAR(20),
     address INT REFERENCES locations(location_id) on delete set null
 );
@@ -107,6 +99,25 @@ create table shop_purchases(
     quantity INT NOT NULL CHECK (quantity > 0),
     wholesale_unit_price NUMERIC(12,2) NOT NULL CHECK (wholesale_unit_price >= 0),
     purchased_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- The compensation half of removing a listing. A hard DELETE from products is
+-- impossible (see fn_prevent_delete below), so an administrator "removing" a
+-- listing means discontinued = true plus paying the vendor back for the stock
+-- they still hold. This is the ledger of those payments; shops.earnings is the
+-- running total. Also supplied as migration 006.
+create table vendor_refunds(
+    refund_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    shop_id INT REFERENCES shops(shop_id) ON DELETE RESTRICT NOT NULL,
+    prod_id INT REFERENCES products(prod_id) ON DELETE RESTRICT NOT NULL,
+    master_prod_id INT REFERENCES master_products(master_prod_id) ON DELETE RESTRICT NOT NULL,
+    units INT NOT NULL CHECK (units >= 0),
+    -- amount / units, and therefore NULL when units is 0: the price of no units
+    -- is not a number. See 006_vendor_refunds.sql for why it is an average.
+    unit_amount NUMERIC(12,2),
+    amount NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
+    reason VARCHAR NOT NULL CHECK (reason IN ('admin_removal', 'shop_closed')),
+    removed_by INT REFERENCES users(user_id) ON DELETE RESTRICT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 create table attributes(
     attribute_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -154,9 +165,13 @@ create table shop_reviews(
 --raise exception when deleting from delivery_personnel
 create table delivery_personnel(
     delivery_person_id INT references users(user_id)  on delete restrict  primary key,
-    vehicle_info TEXT,
+    vehicle_info TEXT,--free-text notes; the fields below are the parts worth filtering on
+    vehicle_type VARCHAR,--motorcycle/car/van/bicycle
+    vehicle_number VARCHAR,--registration or plate
+    license_number VARCHAR,
+    vehicle_model VARCHAR,
     active_status varchar check(active_status in ('available','on_delivery','unavailable')) default 'available',--when :new.active_status='unavailable' when order still 'shipped' or 'pending', set orders.delivery personnel:=null and order_status:='pending'
-    earnings decimal 
+    earnings decimal
 
 );
 --restrict deletion 
@@ -328,9 +343,14 @@ RETURNS TRIGGER AS $$
 BEGIN
     UPDATE products p SET in_stock = p.in_stock + oi.quantity
     FROM order_items oi WHERE oi.order_id = NEW.order_id AND oi.prod_id = p.prod_id;
-    UPDATE orders SET delivery_person_id = NULL WHERE order_id = NEW.order_id;
+    -- The commission goes with everything else: a cancelled order earned the
+    -- platform nothing, and a stale positive figure would show as revenue next
+    -- to a failed payment. See migrations/008.
+    UPDATE orders SET delivery_person_id = NULL, platform_commission = 0
+    WHERE order_id = NEW.order_id;
     UPDATE payments SET payment_status = 'failed', paid_at = NULL
     WHERE order_id = NEW.order_id AND payment_status = 'pending';
+    UPDATE order_items SET platform_commission = 0 WHERE order_id = NEW.order_id;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -370,6 +390,35 @@ FOR EACH ROW
 WHEN (NEW.active_status = 'disabled' AND OLD.active_status IS DISTINCT FROM 'disabled')
 EXECUTE FUNCTION fn_disable_user_dependents();
 
+-- =========================================================
+-- 7b. Undo the shop half of the cascade when a user is restored
+--     An administrator un-banning a user expects the user's shops to come back.
+--     Listings deliberately stay discontinued (fn_discontinue_products_on_shop_disable
+--     is one-way), so a vendor consciously relists rather than having retired
+--     listings silently resurrected.
+--     delivery_personnel is deliberately left alone: the disable direction sets a
+--     courier 'unavailable', which also releases their in-flight orders, and
+--     returning them to 'available' would put them back on duty without opting in.
+--     Couriers set their own availability from the delivery workspace.
+-- =========================================================
+CREATE OR REPLACE FUNCTION fn_enable_user_dependents()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE shops
+    SET active_status = 'active'
+    WHERE owner = NEW.user_id
+      AND active_status = 'disabled';
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_enable_user_dependents
+AFTER UPDATE ON users
+FOR EACH ROW
+WHEN (NEW.active_status = 'active' AND OLD.active_status IS DISTINCT FROM 'active')
+EXECUTE FUNCTION fn_enable_user_dependents();
+
 -- Complete application invariants (also supplied as migration 003).
 -- Additive and rerunnable. Existing orders, products and reviews are preserved.
 -- A completed delivery is the proof of purchase for a product review.
@@ -392,6 +441,33 @@ DROP TRIGGER IF EXISTS trg_verify_product_review_purchase ON product_reviews;
 CREATE TRIGGER trg_verify_product_review_purchase
 BEFORE INSERT OR UPDATE ON product_reviews
 FOR EACH ROW EXECUTE FUNCTION fn_verify_product_review_purchase();
+
+-- The same rule for shop reviews: a delivered order containing one of the
+-- shop's listings is the proof of purchase. Also supplied as migration 007.
+CREATE OR REPLACE FUNCTION fn_verify_shop_review_purchase()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM orders o
+        JOIN order_items oi ON oi.order_id = o.order_id
+        JOIN products p ON p.prod_id = oi.prod_id
+        JOIN users u ON u.user_id = o.user_id
+        JOIN roles r ON r.role_id = u.user_role
+        WHERE o.user_id = NEW.user_id
+          AND p.shop_id = NEW.shop_id
+          AND o.order_status = 'delivered'
+          AND r.role_name = 'customer'
+    ) THEN
+        RAISE EXCEPTION 'Only customers with a delivered order from this shop can review it.';
+    END IF;
+    NEW.last_modified := CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_verify_shop_review_purchase ON shop_reviews;
+CREATE TRIGGER trg_verify_shop_review_purchase
+BEFORE INSERT OR UPDATE ON shop_reviews
+FOR EACH ROW EXECUTE FUNCTION fn_verify_shop_review_purchase();
 
 -- Restrict order lifecycle transitions.
 CREATE OR REPLACE FUNCTION fn_guard_order_transition()

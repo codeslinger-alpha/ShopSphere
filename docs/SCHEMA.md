@@ -1,7 +1,7 @@
 # ShopSphere schema and ERD
 
 Generated from `server/sql/schema.sql` by `python3 scripts/document-schema.py`.
-The schema contains **22 application tables**. `schema_migrations` is added by the migration runner.
+The schema contains **21 application tables**. `schema_migrations` is added by the migration runner.
 
 ## Entity relationships
 
@@ -27,15 +27,6 @@ erDiagram
         int role_id PK
         varchar role_name UK
         text description
-    }
-    permissions["permissions"] {
-        varchar permission_id PK
-        varchar permission_name UK
-        text description
-    }
-    rolePermissions["role_permissions"] {
-        int role_id PK, FK
-        varchar permission_id PK, FK
     }
     users["users"] {
         int user_id PK
@@ -101,6 +92,18 @@ erDiagram
         numeric wholesale_unit_price
         timestamp purchased_at
     }
+    vendorRefunds["vendor_refunds"] {
+        int refund_id PK
+        int shop_id FK
+        int prod_id FK
+        int master_prod_id FK
+        int units
+        numeric unit_amount
+        numeric amount
+        varchar reason
+        int removed_by FK
+        timestamp created_at
+    }
     attributes["attributes"] {
         int attribute_id PK
         varchar name
@@ -141,6 +144,10 @@ erDiagram
     deliveryPersonnel["delivery_personnel"] {
         int delivery_person_id PK, FK
         text vehicle_info
+        varchar vehicle_type
+        varchar vehicle_number
+        varchar license_number
+        varchar vehicle_model
         varchar active_status
         decimal earnings
     }
@@ -172,8 +179,6 @@ erDiagram
         decimal platform_commission
     }
     countries ||..o{ locations : "country_id"
-    roles ||--o{ rolePermissions : "role_id"
-    permissions ||--o{ rolePermissions : "permission_id"
     roles |o..o{ users : "user_role"
     locations |o..o{ users : "address"
     users ||..o{ shops : "owner"
@@ -184,6 +189,10 @@ erDiagram
     shops ||..o{ products : "shop_id"
     shops ||..o{ shopPurchases : "shop_id"
     masterProducts ||..o{ shopPurchases : "master_prod_id"
+    shops ||..o{ vendorRefunds : "shop_id"
+    products ||..o{ vendorRefunds : "prod_id"
+    masterProducts ||..o{ vendorRefunds : "master_prod_id"
+    users ||..o{ vendorRefunds : "removed_by"
     categories ||--o{ categoryAttributes : "category_id"
     attributes ||--o{ categoryAttributes : "attribute_id"
     masterProducts ||--o{ attributeValues : "master_prod_id"
@@ -237,21 +246,6 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `role_name` | `VARCHAR` | — | Yes | not null UNIQUE |
 | `description` | `TEXT` | — | No | default null |
 
-### permissions
-
-| Column | SQL type | Key | Required | Definition |
-| --- | --- | --- | --- | --- |
-| `permission_id` | `VARCHAR(50)` | PK | Yes | PRIMARY KEY |
-| `permission_name` | `VARCHAR` | — | Yes | not null UNIQUE |
-| `description` | `TEXT` | — | No | default null |
-
-### role_permissions
-
-| Column | SQL type | Key | Required | Definition |
-| --- | --- | --- | --- | --- |
-| `role_id` | `INT` | PK FK | Yes | REFERENCES roles(role_id) on delete cascade not null |
-| `permission_id` | `VARCHAR(50)` | PK FK | Yes | REFERENCES permissions(permission_id) on delete cascade not null |
-
 ### users
 
 | Column | SQL type | Key | Required | Definition |
@@ -281,7 +275,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `description` | `TEXT` | — | No |  |
 | `earnings` | `decimal` | — | No | default 0 |
 | `created_at` | `TIMESTAMP` | — | No | DEFAULT CURRENT_TIMESTAMP |
-| `active_status` | `varchar` | — | Yes | check(active_status in ('active','disabled')) default 'active' |
+| `active_status` | `varchar` | — | Yes | check(active_status in ('active','disabled','pending')) default 'active' |
 | `phone_numbers` | `VARCHAR(20)` | — | No |  |
 | `address` | `INT` | FK | No | REFERENCES locations(location_id) on delete set null |
 
@@ -333,6 +327,21 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `quantity` | `INT` | — | Yes | NOT NULL CHECK (quantity > 0) |
 | `wholesale_unit_price` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (wholesale_unit_price >= 0) |
 | `purchased_at` | `TIMESTAMP` | — | Yes | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### vendor_refunds
+
+| Column | SQL type | Key | Required | Definition |
+| --- | --- | --- | --- | --- |
+| `refund_id` | `INT` | PK | Yes | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| `shop_id` | `INT` | FK | Yes | REFERENCES shops(shop_id) ON DELETE RESTRICT NOT NULL |
+| `prod_id` | `INT` | FK | Yes | REFERENCES products(prod_id) ON DELETE RESTRICT NOT NULL |
+| `master_prod_id` | `INT` | FK | Yes | REFERENCES master_products(master_prod_id) ON DELETE RESTRICT NOT NULL |
+| `units` | `INT` | — | Yes | NOT NULL CHECK (units >= 0) |
+| `unit_amount` | `NUMERIC(12,2)` | — | No |  |
+| `amount` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (amount >= 0) |
+| `reason` | `VARCHAR` | — | Yes | NOT NULL CHECK (reason IN ('admin_removal', 'shop_closed')) |
+| `removed_by` | `INT` | FK | Yes | REFERENCES users(user_id) ON DELETE RESTRICT NOT NULL |
+| `created_at` | `TIMESTAMP` | — | Yes | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
 ### attributes
 
@@ -398,6 +407,10 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | --- | --- | --- | --- | --- |
 | `delivery_person_id` | `INT` | PK FK | Yes | references users(user_id) on delete restrict primary key |
 | `vehicle_info` | `TEXT` | — | No |  |
+| `vehicle_type` | `VARCHAR` | — | No |  |
+| `vehicle_number` | `VARCHAR` | — | No |  |
+| `license_number` | `VARCHAR` | — | No |  |
+| `vehicle_model` | `VARCHAR` | — | No |  |
 | `active_status` | `varchar` | — | Yes | check(active_status in ('available','on_delivery','unavailable')) default 'available' |
 | `earnings` | `decimal` | — | No |  |
 
@@ -440,21 +453,23 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 ## Normalization and deliberate exceptions
 
 - Country/location, role/user, shop/listing and category/master relationships separate independent facts.
-- Many-to-many relationships use role_permissions, category_attributes, attribute_values, cart_items, wish_list_items, product_reviews, shop_reviews and order_items.
+- Many-to-many relationships use category_attributes, attribute_values, cart_items, wish_list_items, product_reviews, shop_reviews and order_items.
 - Listing name/images duplicate master identity for compatibility with the original schema; master edits synchronize them through the API. Direct SQL maintenance must preserve this rule. This is a deliberate denormalization rather than a claim of strict 3NF for every table.
 - Wholesale and order unit prices are historical snapshots. They must not change when current catalog prices change.
-- Order total is a derived cache maintained by a trigger. Points/earnings/commissions retain the existing schema but have no complete accounting policy.
+- Order total is a derived cache maintained by a trigger, and platform commission is a separate derived column per line and per order, so gross value and platform revenue never share a field.
+- Points retain the existing schema but have no accounting policy; `users.point` is read and never written. Earnings and commission do have one, invented rather than supplied: see docs/REFUNDS_AND_READ_SURFACES.md.
 - Attribute values are text (an entity/attribute/value model); category requirements are enforced on available masters at transaction commit.
 - Images and phone_numbers currently store one URL/phone per row. Multi-image and multi-phone storage is not modeled as comma-separated lists.
+- There is no permissions/role_permissions pair. Both were seed-only data no code consulted, and 009_drop_permissions.sql removed them; authorization is requireRole per mounted router.
 
 ## Trigger behavior
 
 - Hard deletion is blocked for users, shops, master_products, products, delivery_personnel and orders; status fields preserve history.
 - Removing a role disables affected users. Disabling a user disables their shops and makes their delivery profile unavailable.
 - Disabling a shop discontinues listings. An unavailable courier releases pending/shipped assignments.
-- Cancelling a pending order restores stock once, detaches its courier and marks pending payments failed; line items remain.
+- Cancelling a pending order restores stock once, detaches its courier, marks pending payments failed and voids the platform commission; line items remain.
 - Order status transitions are restricted; line-item changes recalculate both old and new order totals when moved.
-- Reviews require a delivered order for that exact customer/listing on both INSERT and UPDATE.
+- Product reviews require a delivered order for that exact customer/listing, and shop reviews require a delivered order for any listing from that shop, on both INSERT and UPDATE.
 - Deferred category-value constraints validate masters, requirements and value edits atomically.
 
 Country/category cascade deletes exist in the original DDL. There are no public country-delete endpoints, and the admin API rejects deletion of categories with children or master products. Shop-owner/delivery role ownership is enforced by API write paths, not by role-specific foreign keys.

@@ -3,14 +3,104 @@ const {
   GET_PRODUCT_BY_ID,
   GET_MASTER_ATTRIBUTE_VALUES,
   LIST_CATEGORIES,
-  LIST_PRODUCTS,
   LIST_ROLES,
   LIST_SHOPS,
-  LIST_USERS,
+  buildProductFacetsQuery,
+  buildProductListQuery,
 } = require("../queries/catalogQueries");
 const { CHECK_DATABASE_CONNECTION } = require("../queries/systemQueries");
+const { paginated } = require("../utils/listQuery");
 
-const { parsePositiveInteger } = require("../utils/validation");
+const {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  SORT_ORDERS,
+  parseAttributeFilters,
+  parsePage,
+  parsePageSize,
+  parsePositiveInteger,
+  parsePrice,
+  parseSearchTerm,
+  parseSort,
+} = require("../utils/validation");
+
+// Turns the catalog query string into the filter object the query builders
+// expect. Returns { filters } on success or { error } with a shopper-readable
+// message. Absent parameters fall back to browsing the whole available catalog.
+function parseProductQuery(query = {}) {
+  const filters = {
+    q: "",
+    categoryId: null,
+    minPrice: null,
+    maxPrice: null,
+    attributes: new Map(),
+    sort: SORT_ORDERS[0],
+    page: 1,
+    limit: DEFAULT_PAGE_SIZE,
+  };
+
+  if (query.q !== undefined && query.q !== "") {
+    const term = parseSearchTerm(query.q);
+    if (term === null)
+      return { error: "A search term can be up to 200 characters." };
+    filters.q = term;
+  }
+
+  if (query.category_id !== undefined && query.category_id !== "") {
+    const categoryId = parsePositiveInteger(query.category_id);
+    if (!categoryId)
+      return { error: "Category ID must be a positive integer." };
+    filters.categoryId = categoryId;
+  }
+
+  for (const [parameter, field] of [
+    ["min_price", "minPrice"],
+    ["max_price", "maxPrice"],
+  ]) {
+    if (query[parameter] === undefined || query[parameter] === "") continue;
+    const price = parsePrice(query[parameter]);
+    if (price === null)
+      return {
+        error: "Prices must be positive numbers with up to two decimals.",
+      };
+    filters[field] = price;
+  }
+  if (
+    filters.minPrice !== null &&
+    filters.maxPrice !== null &&
+    filters.minPrice > filters.maxPrice
+  )
+    return { error: "The minimum price cannot exceed the maximum price." };
+
+  if (query.sort !== undefined && query.sort !== "") {
+    const sort = parseSort(query.sort);
+    if (sort === null)
+      return { error: `Sort must be one of: ${SORT_ORDERS.join(", ")}.` };
+    filters.sort = sort;
+  }
+
+  if (query.page !== undefined && query.page !== "") {
+    const page = parsePage(query.page);
+    if (page === null) return { error: "Page must be a positive integer." };
+    filters.page = page;
+  }
+
+  if (query.limit !== undefined && query.limit !== "") {
+    const limit = parsePageSize(query.limit);
+    if (limit === null)
+      return { error: `Limit must be a positive integer up to ${MAX_PAGE_SIZE}.` };
+    filters.limit = limit;
+  }
+
+  const attributes = parseAttributeFilters(query.attribute);
+  if (attributes === null)
+    return {
+      error: "Attribute filters must use the form attribute_id:value.",
+    };
+  filters.attributes = attributes;
+
+  return { filters };
+}
 
 async function listRoles(req, res) {
   try {
@@ -23,12 +113,40 @@ async function listRoles(req, res) {
 }
 
 async function listProducts(req, res) {
+  const parsed = parseProductQuery(req.query);
+  if (parsed.error) {
+    return res.status(400).json({ message: parsed.error }); // 400 Bad Request: required input is missing or invalid.
+  }
+
+  const filters = parsed.filters;
   try {
-    const result = await pool.query(LIST_PRODUCTS);
-    return res.json(result.rows);
+    const { text, values } = buildProductListQuery(filters);
+    const result = await pool.query(text, values);
+
+    return res.json(paginated(result.rows, filters.page, filters.limit));
   } catch (error) {
     console.error("List products error:", error);
     return res.status(500).json({ message: "Could not load products." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
+  }
+}
+
+// Checkbox values for the catalog filter panel, grouped by the client on
+// attribute_id. Category is optional: without it, the whole catalog is scoped.
+async function listProductFacets(req, res) {
+  const parsed = parseProductQuery(req.query);
+  if (parsed.error) {
+    return res.status(400).json({ message: parsed.error }); // 400 Bad Request: required input is missing or invalid.
+  }
+
+  try {
+    const { text, values } = buildProductFacetsQuery(parsed.filters);
+    const result = await pool.query(text, values);
+    return res.json(result.rows);
+  } catch (error) {
+    console.error("List product facets error:", error);
+    return res
+      .status(500)
+      .json({ message: "Could not load product filters." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
   }
 }
 
@@ -79,16 +197,6 @@ async function listShops(req, res) {
   }
 }
 
-async function listUsers(req, res) {
-  try {
-    const result = await pool.query(LIST_USERS);
-    return res.json(result.rows);
-  } catch (error) {
-    console.error("List users error:", error);
-    return res.status(500).json({ message: "Could not load users." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
-}
-
 async function healthCheck(req, res) {
   try {
     const result = await pool.query(CHECK_DATABASE_CONNECTION);
@@ -107,8 +215,8 @@ module.exports = {
   getProduct,
   healthCheck,
   listCategories,
+  listProductFacets,
   listProducts,
   listRoles,
   listShops,
-  listUsers,
 };

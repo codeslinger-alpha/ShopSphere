@@ -10,7 +10,7 @@ separate command to contact anyone, browse, or change the task scope.
 
 | DOCX requirement | Implementation / demonstration |
 | --- | --- |
-| Preserve schema, ERD, normalization, keys, constraints and junction tables | `server/sql/schema.sql`, `docs/SCHEMA.md`: 22 application tables, complete relationship/column reference and deliberate denormalization explanations. |
+| Preserve schema, ERD, normalization, keys, constraints and junction tables | `server/sql/schema.sql`, and `docs/SCHEMA.md` — its generated ERD, complete relationship/column reference and deliberate denormalization explanations. Regenerate it with `python3 scripts/document-schema.py` after any schema change; it does not run itself. |
 | Connection pool, DDL, seeds and working backend | `config/db.js`, schema, additive migrations and demo seed; PostgreSQL integration tests. |
 | Sign-up/login for every role | Public customer/vendor/delivery registration; protected admin account creation from the user administration page; login works for all four roles. |
 | Salted password hashing | bcrypt, cost 12; byte-length checks; tests verify distinct hashes for identical passwords. |
@@ -59,11 +59,18 @@ separate command to contact anyone, browse, or change the task scope.
 ## Explicit limits
 
 Product deletion means discontinuation, as required by the existing no-hard-delete
-triggers. Proof of purchase means a delivered order for the exact retail listing.
+triggers; an admin removal also refunds the vendor's remaining stock, weighed
+newest-first against what they actually paid (`docs/REFUNDS_AND_READ_SURFACES.md`).
+Proof of purchase means a delivered order for the exact retail listing.
 Payment is cash-on-delivery recording; wholesale purchases do not transfer money.
-No points, commission, payout or supplier-stock rules were supplied, so these are
-not fabricated. Shop reviews and permission-mapping data remain schema/seed-only;
-backend authorization uses explicit database-resolved role names. The original
+No points, commission, payout or supplier-stock rules were supplied. Commission,
+courier pay and shop reviews were therefore invented later, as stated policies with
+named constants rather than discovered rules, and the docs say which is which. No
+points economy was invented: `users.point` is read on the profile and never written.
+The `permissions`/`role_permissions` pair was dropped by
+`server/sql/migrations/009_drop_permissions.sql` rather than left as seed-only data
+nothing consulted; backend authorization uses explicit database-resolved role names,
+checked per role by `requireRole` on a mounted router. The original
 proposal and any prior 40% evaluation feedback are needed to certify the course's
 exact coverage percentage or resolve previously flagged modeling issues.
 

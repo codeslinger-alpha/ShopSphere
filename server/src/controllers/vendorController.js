@@ -1,12 +1,3 @@
-/*
-Function	Used by route	Purpose
-shops	GET /vendor/shops	Returns only the shops owned by the logged-in vendor.
-saveShop	POST /vendor/shops, PUT /vendor/shops/:shopId	Creates a shop or updates one of the vendor’s own shops.
-listings	GET /vendor/listings	Returns all product listings belonging to the vendor’s shops.
-purchases	GET /vendor/purchases	Returns wholesale purchase history for the vendor’s shops.
-buy	POST /vendor/listings	Records a wholesale purchase and creates or restocks a product listing.
-updateListing	PUT /vendor/listings/:productId	Changes a vendor-owned listing’s description, retail price, or discontinued status.
-*/
 const pool = require("../config/db");
 const transaction = require("../utils/transaction");
 const v = require("../utils/input");
@@ -25,36 +16,28 @@ async function saveShop(req, res) {
     v.url(b.logo, "Logo URL"),
     v.url(b.cover_photo, "Cover photo URL"),
   ];
-  const address = v.address(b),
-    status = b.active_status ?? "active";
-  if (!["active", "disabled"].includes(status))
-    v.fail(400, "Choose active or disabled shop status.");
+  // active_status is not read from the body. New shops start 'pending' and only
+  // an administrator can approve, disable or restore one, so a vendor can never
+  // activate their own shop or reverse a ban.
+  const address = v.address(b);
   const shop = await transaction(async (c) => {
     if (
       id &&
-      !(await c.query(q.LOCK_OWNED_SHOP, [id, req.user.user_id])).rowCount
+      !(await c.query(q.OWNED_SHOP, [id, req.user.user_id])).rowCount
     )
       v.fail(404, "Your shop was not found.");
     const location = (await c.query(CREATE_LOCATION, address)).rows[0]
       .location_id;
     return (
       id
-        ? await c.query(q.UPDATE_SHOP, [
-            ...values,
-            location,
-            status,
-            id,
-            req.user.user_id,
-          ])
-        : await c.query(q.CREATE_SHOP, [
-            ...values,
-            location,
-            status,
-            req.user.user_id,
-          ])
+        ? await c.query(q.UPDATE_SHOP, [...values, location, id, req.user.user_id])
+        : await c.query(q.CREATE_SHOP, [...values, location, req.user.user_id])
     ).rows[0];
   });
-  res.status(id ? 200 : 201).json({ message: "Shop saved.", shop });
+  const message = id
+    ? "Shop saved."
+    : "Shop submitted. An administrator will review it before it goes live.";
+  res.status(id ? 200 : 201).json({ message, shop });
 }
 async function listings(req, res) {
   res.json((await pool.query(q.LIST_OWNED_LISTINGS, [req.user.user_id])).rows);
@@ -70,16 +53,15 @@ async function buy(req, res) {
     price = v.money(b.unit_price),
     description = v.string(b.description, "Seller description", 20000);
   const listing = await transaction(async (c) => {
-    await c.query(q.LOCK_VENDOR_CATALOG);
     if (
-      !(await c.query(q.LOCK_ACTIVE_OWNED_SHOP, [shopId, req.user.user_id]))
+      !(await c.query(q.ACTIVE_OWNED_SHOP, [shopId, req.user.user_id]))
         .rowCount
     )
       v.fail(404, "Your active shop was not found.");
-    const master = (await c.query(q.LOCK_AVAILABLE_MASTER, [masterId])).rows[0];
+    const master = (await c.query(q.AVAILABLE_MASTER, [masterId])).rows[0];
     if (!master) v.fail(404, "Available master product not found.");
     const existing = (
-      await c.query(q.LOCK_LISTING_FOR_MASTER, [shopId, masterId])
+      await c.query(q.LISTING_FOR_MASTER, [shopId, masterId])
     ).rows[0];
     if (existing && existing.in_stock + quantity > 2147483647)
       v.fail(409, "This purchase exceeds the inventory limit.");
