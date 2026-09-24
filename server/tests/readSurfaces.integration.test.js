@@ -5,12 +5,12 @@ const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
-const pool = require("../src/config/db");
+const pool = require("../src/db/pool");
 const {
   COURIER_BASE_FEE,
   COURIER_RATE,
   PLATFORM_COMMISSION_RATE,
-} = require("../src/queries/orderQueries");
+} = require("../src/db/queries/orderQueries");
 const { createAuthToken } = require("../src/utils/authToken");
 
 // The read surfaces added for the tables nobody could reach, and the two columns

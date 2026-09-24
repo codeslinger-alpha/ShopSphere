@@ -11,12 +11,12 @@
     "dev:client": "npm run dev --workspace client",
     "dev:server": "npm run dev --workspace server",
     "build": "npm run build --workspace client",
-    "lint": "npm run lint --workspace client",
+    "lint": "oxlint --deny-warnings server/src server/scripts && npm run lint --workspace client",
     "start": "npm start --workspace server",
     "db:migrate": "npm run migrate --workspace server",
     "db:seed": "npm run seed --workspace server",
     "test": "npm run test:integration --workspace server",
-    "test:e2e": "npm run test:e2e --workspace client",
+    "test:e2e": "npm run test:e2e --workspace client --",
     "db:init": "npm run init --workspace server",
     "docs:schema": "python3 scripts/document-schema.py"
   }

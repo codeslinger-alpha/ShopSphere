@@ -2,8 +2,8 @@
 
 PostgreSQL, Express, React and Node.js shopping application using raw SQL.
 
-Read the [server/database flow guide](docs/SERVER_DATABASE_FLOW.md) for the API,
-controllers, SQL, transactions, triggers and browser developer-tools inspection.
+Read the [backend guide](docs/BACKEND.md) for the file map, API routes, SQL,
+transactions, migrations and database rules.
 The broader [website/API guide](docs/WEBSITE_FLOW.md) covers role workflows and
 field ownership.
 See [evaluation coverage](docs/IMPLEMENTATION_STEPS.md) and the

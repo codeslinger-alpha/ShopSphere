@@ -32,14 +32,14 @@ function errorHandler(error, req, res, next) {
     return reject(400, "Values violate a required database constraint.");
   if (error.code === "P0001") return reject(409, error.message);
   if (error.type === "entity.parse.failed")
-    return reject(400, "Request body must contain valid JSON."); // 400 Bad Request: malformed JSON.
+    return reject(400, "Request body must contain valid JSON.");
   if (error.type === "entity.too.large")
-    return reject(413, "Request body is too large."); // 413 Content Too Large: request exceeds the JSON body limit.
+    return reject(413, "Request body is too large.");
   console.error(`[api] 500 ${req.method} ${req.originalUrl}`);
   console.error("Unhandled request error:", error);
   return res
     .status(500)
-    .json({ message: "An unexpected server error occurred." }); // 500 Internal Server Error: return JSON without exposing internal details.
+    .json({ message: "An unexpected server error occurred." });
 }
 
 module.exports = { errorHandler };

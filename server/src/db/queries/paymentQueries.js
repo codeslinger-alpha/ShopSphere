@@ -13,7 +13,7 @@
 // back as strings; the cast is what keeps that string at two decimal places
 // rather than at whatever scale the arithmetic happened to produce.
 
-const { escapeLikePattern } = require("../utils/sql");
+const { escapeLikePattern } = require("../sql");
 
 // Mirrors the CHECK constraints on payments and vendor_refunds. The lists live
 // here rather than in a controller so the query builder and the validator cannot

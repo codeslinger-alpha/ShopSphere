@@ -155,3 +155,26 @@ test("collection load failures do not claim the collection is empty", async ({ p
     await expect(page.getByRole("alert")).toContainText("Could not load the cart");
     await expect(page.getByText("Your cart is empty.")).toHaveCount(0);
 });
+
+test("a stale cart badge response cannot overwrite the latest count", async ({ page }) => {
+    await mockApi(page);
+    await page.addInitScript(() => {
+        const originalFetch = window.fetch;
+        window.cartReads = [];
+        window.fetch = (url, options) => String(url).endsWith("/api/cart")
+            ? new Promise((resolve) => window.cartReads.push((quantity) => resolve(
+                new Response(JSON.stringify([{ quantity }]), { headers: { "Content-Type": "application/json" } }),
+            )))
+            : originalFetch(url, options);
+    });
+    await page.goto("/wishlist");
+    await expect.poll(() => page.evaluate(() => window.cartReads.length)).toBeGreaterThan(0);
+    await page.evaluate(() => window.dispatchEvent(new Event("shopsphere:cart-changed")));
+    await page.evaluate(() => window.cartReads.pop()(6));
+    await expect(page.getByRole("link", { name: /Cart\s*, 6 items/ })).toBeVisible();
+    await page.evaluate(async () => {
+        window.cartReads.forEach((resolve) => resolve(2));
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    await expect(page.getByRole("link", { name: /Cart\s*, 6 items/ })).toBeVisible();
+});

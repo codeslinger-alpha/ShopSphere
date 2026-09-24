@@ -1,4 +1,4 @@
-const { escapeLikePattern } = require("../utils/sql");
+const { escapeLikePattern } = require("../sql");
 
 const USER_STATUSES = ["active", "disabled"];
 const SHOP_STATUSES = ["active", "disabled", "pending"];

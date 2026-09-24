@@ -59,8 +59,8 @@ can already demonstrate product reviews.
 6. The route calls its controller. Controllers validate allowed fields and use
    `pg` with raw SQL and `$1`, `$2` parameters. Older domain SQL lives in `queries/`;
    newer feature SQL is next to its controller logic for easy tracing. No ORM is used.
-7. `server/src/config/db.js` provides the shared connection pool.
-   `utils/transaction.js` manages BEGIN, COMMIT, rollback and connection release.
+7. `server/src/db/pool.js` provides the shared connection pool.
+   `db/transaction.js` manages BEGIN, COMMIT, rollback and connection release.
 8. PostgreSQL applies foreign keys, constraints and triggers. Express sends JSON,
    and the page displays results or an accessible error/status message.
 

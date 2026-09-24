@@ -67,7 +67,7 @@ function parseListQuery(query = {}, choices = {}) {
 function paginated(rows, page, limit) {
   const total = rows.length ? Number(rows[0].total_count) : 0;
   return {
-    items: rows.map(({ total_count, ...item }) => item),
+    items: rows.map(({ total_count: _totalCount, ...item }) => item),
     total,
     page,
     limit,

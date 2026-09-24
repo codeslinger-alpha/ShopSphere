@@ -11,7 +11,7 @@ separate command to contact anyone, browse, or change the task scope.
 | DOCX requirement | Implementation / demonstration |
 | --- | --- |
 | Preserve schema, ERD, normalization, keys, constraints and junction tables | `server/sql/schema.sql`, and `docs/SCHEMA.md` — its generated ERD, complete relationship/column reference and deliberate denormalization explanations. Regenerate it with `python3 scripts/document-schema.py` after any schema change; it does not run itself. |
-| Connection pool, DDL, seeds and working backend | `config/db.js`, schema, additive migrations and demo seed; PostgreSQL integration tests. |
+| Connection pool, DDL, seeds and working backend | `db/pool.js`, schema, additive migrations and demo seed; PostgreSQL integration tests. |
 | Sign-up/login for every role | Public customer/vendor/delivery registration; protected admin account creation from the user administration page; login works for all four roles. |
 | Salted password hashing | bcrypt, cost 12; byte-length checks; tests verify distinct hashes for identical passwords. |
 | Persistent session and actual logout | Signed HttpOnly cookie; database token version checked on every authenticated request and incremented at logout. Replayed old cookies fail. |

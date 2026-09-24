@@ -58,6 +58,7 @@ export function AuthProvider({ children }) {
     try {
       const data = await api("/auth/me");
       setUser(data.user);
+      setSessionError("");
     } catch (error) {
       setSessionError(error.message);
     }

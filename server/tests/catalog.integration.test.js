@@ -5,11 +5,32 @@ const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
-const pool = require("../src/config/db");
+const pool = require("../src/db/pool");
 
 // Catalog discovery over the real schema: search, category/subcategory scope,
 // attribute facets, price, sort and paging. Each check runs inside a savepoint
 // that is rolled back, so the seeded demo data is identical for every case.
+test("SQL logs summarize query configs without exposing bound values", async (t) => {
+  const { timedQuery } = require("../src/db/logger");
+  const previous = process.env.LOG_SQL;
+  process.env.LOG_SQL = "true";
+  const lines = [];
+  t.mock.method(console, "log", (line) => lines.push(line));
+  t.mock.method(console, "error", (line) => lines.push(line));
+  const query = { text: "SELECT $1::text", values: ["private@example.test"] };
+  try {
+    await timedQuery({ query: async () => ({ rowCount: 1 }) }, query);
+    const failure = Object.assign(new Error("private@example.test"), { code: "XX000" });
+    await assert.rejects(timedQuery({ query: async () => { throw failure; } }, query), failure);
+    assert.ok(lines.every((line) => line.includes("SELECT $1::text")));
+    assert.ok(lines.every((line) => !line.includes("private@example.test")));
+    assert.match(lines[1], /XX000/);
+  } finally {
+    if (previous === undefined) delete process.env.LOG_SQL;
+    else process.env.LOG_SQL = previous;
+  }
+});
+
 test("catalog search, filtering and facets against PostgreSQL", async (t) => {
   pool.options.connectionTimeoutMillis = 10000;
   let client;

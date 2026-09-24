@@ -4,8 +4,8 @@ require("dotenv").config({
   path: path.join(__dirname, "../.env"),
   quiet: true,
 });
-const pool = require("../src/config/db");
-const transaction = require("../src/utils/transaction");
+const pool = require("../src/db/pool");
+const transaction = require("../src/db/transaction");
 async function migrate() {
   await transaction(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock(216, 601)");

@@ -1,6 +1,6 @@
-const pool = require("../config/db");
+const pool = require("../db/pool");
 const v = require("../utils/input");
-const q = require("../queries/reviewQueries");
+const q = require("../db/queries/reviewQueries");
 async function list(req, res) {
   res.json(
     (

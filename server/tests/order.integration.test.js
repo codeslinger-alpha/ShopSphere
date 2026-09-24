@@ -5,7 +5,7 @@ const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
-const pool = require("../src/config/db");
+const pool = require("../src/db/pool");
 const { createAuthToken } = require("../src/utils/authToken");
 
 // Placing an order: what is claimed, what is refused, and what happens when two
@@ -472,6 +472,22 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
         assert.equal(waiting.data.order.delivery_person_id, null);
       },
     );
+
+    await check("disabled couriers receive no new orders", async () => {
+      await client.query("UPDATE users SET active_status='disabled' WHERE user_id=$1", [courier.user_id]);
+      await setCourierStatus("available");
+      await setCart(customer.user_id, [[watch, 1]]);
+      const placed = await placeOrder(customer);
+      assert.equal(placed.status, 201, placed.data.message);
+      assert.equal(placed.data.order.delivery_person_id, null);
+    });
+
+    await check("inherited property names are invalid delivery statuses", async () => {
+      for (const order_status of ["constructor", "toString", "__proto__"])
+        assert.equal((await request("/api/delivery/orders/1/status", {
+          user: courier, method: "PUT", body: { order_status },
+        })).status, 400);
+    });
 
     await check(
       "checkout uses the profile address unless another one is given",

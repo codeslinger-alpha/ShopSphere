@@ -1,5 +1,5 @@
 const bcrypt = require("bcrypt");
-const pool = require("../config/db");
+const pool = require("../db/pool");
 const {
   CREATE_DELIVERY_PERSONNEL,
   COUNTRY_EXISTS,
@@ -8,12 +8,9 @@ const {
   FIND_ROLE_BY_NAME,
   FIND_USER_BY_EMAIL,
   INCREMENT_TOKEN_VERSION,
-} = require("../queries/authQueries");
-const {
-  BEGIN_TRANSACTION,
-  COMMIT_TRANSACTION,
-  ROLLBACK_TRANSACTION,
-} = require("../queries/transactionQueries");
+} = require("../db/queries/authQueries");
+const transaction = require("../db/transaction");
+const { fail } = require("../utils/input");
 const {
   clearAuthCookie,
   createAuthToken,
@@ -116,80 +113,34 @@ async function register(req, res) {
   const input = cleanRegistrationInput(req.body || {}, adminCreation);
 
   if (input.error) {
-    return res.status(400).json({ message: input.error }); // 400 Bad Request: required input is missing or invalid.
+    return res.status(400).json({ message: input.error });
   }
 
-  let client;
+  // Hash before acquiring a database connection; bcrypt is CPU work.
+  const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
+  const { user, token } = await transaction(async (client) => {
+    const role = (await client.query(FIND_ROLE_BY_NAME, [input.role])).rows[0];
+    if (!role) fail(400, "That account type is unavailable.");
+    if (!(await client.query(COUNTRY_EXISTS, [input.countryId])).rowCount)
+      fail(400, "Choose a valid country.");
 
-  try {
-    client = await pool.connect();
-    await client.query(BEGIN_TRANSACTION);
-
-    const roleResult = await client.query(FIND_ROLE_BY_NAME, [input.role]);
-
-    if (roleResult.rows.length === 0) {
-      await client.query(ROLLBACK_TRANSACTION);
-      return res
-        .status(400)
-        .json({ message: "That account type is unavailable." }); // 400 Bad Request: required input is missing or invalid.
-    }
-    const country = await client.query(COUNTRY_EXISTS, [input.countryId]);
-    if (!country.rows.length) {
-      await client.query(ROLLBACK_TRANSACTION);
-      return res.status(400).json({ message: "Choose a valid country." }); // 400 Bad Request: unknown country ID.
-    }
-
-    const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
     const location = await client.query(CREATE_LOCATION, [
-      input.streetAddress,
-      input.postalCode,
-      input.city,
-      input.stateProvince,
-      input.countryId,
+      input.streetAddress, input.postalCode, input.city,
+      input.stateProvince, input.countryId,
     ]);
-    const userResult = await client.query(CREATE_USER, [
-      roleResult.rows[0].role_id,
-      input.name,
-      passwordHash,
-      input.email,
-      input.phone,
-      input.pfp,
-      location.rows[0].location_id,
+    const created = await client.query(CREATE_USER, [
+      role.role_id, input.name, passwordHash, input.email,
+      input.phone, input.pfp, location.rows[0].location_id,
     ]);
+    const user = { ...created.rows[0], role_name: role.role_name };
+    if (user.role_name === "delivery")
+      await client.query(CREATE_DELIVERY_PERSONNEL, [user.user_id, input.vehicle]);
 
-    const user = {
-      ...userResult.rows[0],
-      role_name: roleResult.rows[0].role_name,
-    };
-
-    if (user.role_name === "delivery") {
-      await client.query(CREATE_DELIVERY_PERSONNEL, [
-        user.user_id,
-        input.vehicle,
-      ]);
-    }
-
-    const token = adminCreation ? null : createAuthToken(user); // Signing must succeed before saving the account.
-    await client.query(COMMIT_TRANSACTION);
-    if (token) setAuthCookie(res, token);
-    return res
-      .status(201)
-      .json({ message: "Account created.", user: publicUser(user) }); // 201 Created: a new account or collection item was added.
-  } catch (error) {
-    if (client) await client.query(ROLLBACK_TRANSACTION).catch(() => {});
-
-    if (error.code === "23505") {
-      // PostgreSQL unique_violation: a value duplicates a UNIQUE key.
-      return res
-        .status(409)
-        .json({ message: "An account with that email already exists." }); // 409 Conflict: the request conflicts with existing data or product availability.
-    }
-
-    console.error("Registration error:", error);
-    return res.status(500).json({ message: "Could not create the account." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  } finally {
-    client?.release();
-  }
+    // Signing must succeed before committing; admin creation preserves its session.
+    return { user, token: adminCreation ? null : createAuthToken(user) };
+  });
+  if (token) setAuthCookie(res, token);
+  return res.status(201).json({ message: "Account created.", user: publicUser(user) });
 }
 
 async function login(req, res) {
@@ -203,7 +154,7 @@ async function login(req, res) {
   if (!email || !password) {
     return res
       .status(400)
-      .json({ message: "Email and password are required." }); // 400 Bad Request: required input is missing or invalid.
+      .json({ message: "Email and password are required." });
   }
 
   if (
@@ -218,35 +169,25 @@ async function login(req, res) {
       });
   }
 
-  try {
-    const result = await pool.query(FIND_USER_BY_EMAIL, [email]);
-    const user = result.rows[0];
+  const result = await pool.query(FIND_USER_BY_EMAIL, [email]);
+  const user = result.rows[0];
 
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return res.status(401).json({ message: "Invalid email or password." }); // 401 Unauthorized: valid login credentials or a valid session are required.
-    }
-
-    if (user.active_status !== "active") {
-      return res.status(403).json({ message: "This account is disabled." }); // 403 Forbidden: this account is not allowed to perform the action.
-    }
-
-    setAuthCookie(res, createAuthToken(user));
-    return res.json({ message: "Login successful.", user: publicUser(user) });
-  } catch (error) {
-    console.error("Login error:", error);
-    return res.status(500).json({ message: "Could not log in." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    return res.status(401).json({ message: "Invalid email or password." });
   }
+
+  if (user.active_status !== "active") {
+    return res.status(403).json({ message: "This account is disabled." });
+  }
+
+  setAuthCookie(res, createAuthToken(user));
+  return res.json({ message: "Login successful.", user: publicUser(user) });
 }
 
 async function logout(req, res) {
-  try {
-    await pool.query(INCREMENT_TOKEN_VERSION, [req.user.user_id]);
-    clearAuthCookie(res);
-    return res.status(204).send(); // 204 No Content: the action succeeded; no response body is sent.
-  } catch (error) {
-    console.error("Logout error:", error);
-    return res.status(500).json({ message: "Could not log out." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
+  await pool.query(INCREMENT_TOKEN_VERSION, [req.user.user_id]);
+  clearAuthCookie(res);
+  return res.status(204).send();
 }
 
 function me(req, res) {

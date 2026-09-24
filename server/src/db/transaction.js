@@ -1,5 +1,5 @@
-const pool = require("../config/db");
-const { timedQuery } = require("./sqlLogger");
+const pool = require("./pool");
+const { timedQuery } = require("./logger");
 
 module.exports = async function transaction(work) {
   const client = await pool.connect();

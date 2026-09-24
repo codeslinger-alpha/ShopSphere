@@ -1,5 +1,6 @@
-const pool = require("../config/db");
+const pool = require("../db/pool");
 const {
+  CHECK_DATABASE_CONNECTION,
   GET_PRODUCT_BY_ID,
   GET_MASTER_ATTRIBUTE_VALUES,
   LIST_CATEGORIES,
@@ -7,8 +8,7 @@ const {
   LIST_SHOPS,
   buildProductFacetsQuery,
   buildProductListQuery,
-} = require("../queries/catalogQueries");
-const { CHECK_DATABASE_CONNECTION } = require("../queries/systemQueries");
+} = require("../db/queries/catalogQueries");
 const { paginated } = require("../utils/listQuery");
 
 const {
@@ -103,31 +103,21 @@ function parseProductQuery(query = {}) {
 }
 
 async function listRoles(req, res) {
-  try {
-    const result = await pool.query(LIST_ROLES);
-    return res.json(result.rows);
-  } catch (error) {
-    console.error("List roles error:", error);
-    return res.status(500).json({ message: "Could not load roles." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
+  const result = await pool.query(LIST_ROLES);
+  return res.json(result.rows);
 }
 
 async function listProducts(req, res) {
   const parsed = parseProductQuery(req.query);
   if (parsed.error) {
-    return res.status(400).json({ message: parsed.error }); // 400 Bad Request: required input is missing or invalid.
+    return res.status(400).json({ message: parsed.error });
   }
 
   const filters = parsed.filters;
-  try {
-    const { text, values } = buildProductListQuery(filters);
-    const result = await pool.query(text, values);
+  const { text, values } = buildProductListQuery(filters);
+  const result = await pool.query(text, values);
 
-    return res.json(paginated(result.rows, filters.page, filters.limit));
-  } catch (error) {
-    console.error("List products error:", error);
-    return res.status(500).json({ message: "Could not load products." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
+  return res.json(paginated(result.rows, filters.page, filters.limit));
 }
 
 // Checkbox values for the catalog filter panel, grouped by the client on
@@ -135,19 +125,12 @@ async function listProducts(req, res) {
 async function listProductFacets(req, res) {
   const parsed = parseProductQuery(req.query);
   if (parsed.error) {
-    return res.status(400).json({ message: parsed.error }); // 400 Bad Request: required input is missing or invalid.
+    return res.status(400).json({ message: parsed.error });
   }
 
-  try {
-    const { text, values } = buildProductFacetsQuery(parsed.filters);
-    const result = await pool.query(text, values);
-    return res.json(result.rows);
-  } catch (error) {
-    console.error("List product facets error:", error);
-    return res
-      .status(500)
-      .json({ message: "Could not load product filters." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
+  const { text, values } = buildProductFacetsQuery(parsed.filters);
+  const result = await pool.query(text, values);
+  return res.json(result.rows);
 }
 
 async function getProduct(req, res) {
@@ -156,45 +139,30 @@ async function getProduct(req, res) {
   if (!productId) {
     return res
       .status(400)
-      .json({ message: "Product ID must be a positive integer." }); // 400 Bad Request: required input is missing or invalid.
+      .json({ message: "Product ID must be a positive integer." });
   }
 
-  try {
-    const result = await pool.query(GET_PRODUCT_BY_ID, [productId]);
+  const result = await pool.query(GET_PRODUCT_BY_ID, [productId]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Product not found." }); // 404 Not Found: the requested route or record could not be found.
-    }
-
-    const product = result.rows[0];
-    const attributes = await pool.query(GET_MASTER_ATTRIBUTE_VALUES, [
-      product.master_prod_id,
-    ]);
-    return res.json({ ...product, attributes: attributes.rows });
-  } catch (error) {
-    console.error("Get product error:", error);
-    return res.status(500).json({ message: "Could not load the product." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
+  if (result.rows.length === 0) {
+    return res.status(404).json({ message: "Product not found." });
   }
+
+  const product = result.rows[0];
+  const attributes = await pool.query(GET_MASTER_ATTRIBUTE_VALUES, [
+    product.master_prod_id,
+  ]);
+  return res.json({ ...product, attributes: attributes.rows });
 }
 
 async function listCategories(req, res) {
-  try {
-    const result = await pool.query(LIST_CATEGORIES);
-    return res.json(result.rows);
-  } catch (error) {
-    console.error("List categories error:", error);
-    return res.status(500).json({ message: "Could not load categories." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
+  const result = await pool.query(LIST_CATEGORIES);
+  return res.json(result.rows);
 }
 
 async function listShops(req, res) {
-  try {
-    const result = await pool.query(LIST_SHOPS);
-    return res.json(result.rows);
-  } catch (error) {
-    console.error("List shops error:", error);
-    return res.status(500).json({ message: "Could not load shops." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
-  }
+  const result = await pool.query(LIST_SHOPS);
+  return res.json(result.rows);
 }
 
 async function healthCheck(req, res) {
@@ -204,10 +172,10 @@ async function healthCheck(req, res) {
       success: true,
       database: result.rows[0].database_connected === 1,
     });
-  } catch (error) {
+  } catch {
     return res
       .status(503)
-      .json({ success: false, message: "Database is unavailable." }); // 503 Service Unavailable: the database is currently unreachable.
+      .json({ success: false, message: "Database is unavailable." });
   }
 }
 

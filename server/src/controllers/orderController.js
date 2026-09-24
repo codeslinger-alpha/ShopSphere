@@ -1,9 +1,8 @@
-const pool = require("../config/db");
-const transaction = require("../utils/transaction");
+const pool = require("../db/pool");
+const transaction = require("../db/transaction");
 const v = require("../utils/input");
-const q = require("../queries/orderQueries");
-const { CREATE_LOCATION } = require("../queries/authQueries");
-const { parsePositiveInteger } = require("../utils/validation");
+const q = require("../db/queries/orderQueries");
+const { CREATE_LOCATION } = require("../db/queries/authQueries");
 
 // Only these two moves exist for a courier, and each one is only legal from the
 // status before it. fn_guard_order_transition enforces the same table in the
@@ -44,12 +43,8 @@ async function resolveShippingAddress(client, userId, body) {
   return profile.address;
 }
 
-// Places the customer's cart as an order, in cash on delivery.
-//
-// The cart is the only input: the listings and quantities come from it, and the
-// prices are the snapshot the customer was shown. Everything below runs in one
-// transaction, so an order either exists complete with its stock claimed, its
-// items, its payment row and an emptied cart — or nothing happened at all.
+// Atomically buy the locked cart rows at current listing prices, record a cash
+// payment, and remove the purchased rows. Any failure rolls back all changes.
 async function placeOrder(req, res) {
   const userId = req.user.user_id;
   const order = await transaction(async (client) => {
@@ -95,25 +90,17 @@ async function placeOrder(req, res) {
       ]);
     }
 
-    // Each line kept its own commission above; this rolls them onto the order so
-    // a revenue report does not have to join order_items to answer "what did we
-    // make on this order". Summed in SQL, not in JavaScript, because the rounded
-    // per-line figures are the authority and the order must not disagree with
-    // its own lines. The result is not returned to the customer: the platform's
-    // margin is not the buyer's business, and Step 6 reads it back as an admin.
+    // Aggregate the rounded commissions stored on each line.
     await client.query(q.RECORD_PLATFORM_COMMISSION, [created.order_id]);
 
     // Read back rather than summed here: trg_order_items_recalc_total has just
     // written total_amount, and the database is the authority on it.
     const totals = (await client.query(q.ORDER_TOTALS, [created.order_id])).rows[0];
     const payment = (
-      await client.query(q.CREATE_PAYMENT, [
-        created.order_id,
-        Number(totals.total_amount) + Number(totals.delivery_cost),
-      ])
+      await client.query(q.CREATE_PAYMENT, [created.order_id])
     ).rows[0];
 
-    await client.query(q.CLEAR_CART, [userId]);
+    await client.query(q.CLEAR_CART, [userId, cart.map((item) => item.prod_id)]);
 
     return {
       ...created,
@@ -131,7 +118,6 @@ async function placeOrder(req, res) {
   });
 
   return res.status(201).json({
-    // 201 Created: a new account or collection item was added.
     message: "Order placed. Pay in cash when it arrives.",
     order,
   });
@@ -149,7 +135,7 @@ async function getOrder(req, res) {
     await pool.query(q.GET_ORDER_BY_USER, [orderId, req.user.user_id])
   ).rows[0];
   if (!order)
-    return res.status(404).json({ message: "Order not found." }); // 404 Not Found: the requested route or record could not be found.
+    return res.status(404).json({ message: "Order not found." });
   const items = (await pool.query(q.GET_ORDER_ITEMS, [orderId])).rows;
   return res.json({ ...order, items });
 }
@@ -165,9 +151,8 @@ async function cancelOrder(req, res) {
       await pool.query(q.GET_ORDER_STATUS, [orderId, req.user.user_id])
     ).rows[0];
     if (!existing)
-      return res.status(404).json({ message: "Order not found." }); // 404 Not Found: the requested route or record could not be found.
+      return res.status(404).json({ message: "Order not found." });
     return res.status(409).json({
-      // 409 Conflict: the request conflicts with existing data or product availability.
       message: `This order is already ${existing.order_status} and cannot be cancelled.`,
     });
   }
@@ -207,7 +192,8 @@ async function listDeliveries(req, res) {
 async function advanceDelivery(req, res) {
   const orderId = v.id(req.params.orderId, "Order");
   const target = req.body?.order_status;
-  const expected = COURIER_TRANSITIONS[target];
+  const expected = Object.hasOwn(COURIER_TRANSITIONS, target)
+    ? COURIER_TRANSITIONS[target] : null;
   if (!expected)
     v.fail(400, "An order can be marked shipped or delivered.");
 
@@ -247,11 +233,7 @@ async function advanceDelivery(req, res) {
           ])
         ).rows[0] || null;
 
-      // The courier is paid in the same breath, and the same reasoning covers
-      // both writes: this branch is only reached on the transition that actually
-      // happened, so neither the settlement nor the pay can be applied twice.
-      // advanced.delivery_person_id is the courier who made that transition —
-      // the compare-and-set matched on it, so it cannot be somebody else's.
+      // The successful status transition makes this credit exactly once.
       courierEarnings = (
         await client.query(q.CREDIT_COURIER_EARNINGS, [
           advanced.delivery_person_id,
@@ -266,7 +248,7 @@ async function advanceDelivery(req, res) {
   });
 
   if (!order)
-    return res.status(404).json({ message: "Order not found." }); // 404 Not Found: the requested route or record could not be found.
+    return res.status(404).json({ message: "Order not found." });
 
   return res.json({
     message:

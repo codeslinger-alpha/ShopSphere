@@ -5,8 +5,8 @@ const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
-const pool = require("../src/config/db");
-const q = require("../src/queries/adminCatalogQueries");
+const pool = require("../src/db/pool");
+const q = require("../src/db/queries/adminCatalogQueries");
 const { createAuthToken } = require("../src/utils/authToken");
 
 // Removing a listing and paying the vendor back for the stock they still hold.

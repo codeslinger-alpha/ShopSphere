@@ -14,21 +14,17 @@ export function useCartCount(user) {
   const userId = isCustomer ? user.user_id : null;
   const [cart, setCart] = useState({ userId: null, count: 0 });
 
-  // A new account's cart is not the previous one's count. Adjusted during render
-  // rather than in an effect, which would paint the last user's badge first.
-  if (cart.userId !== userId) setCart({ userId, count: 0 });
-
   useEffect(() => {
     if (userId === null) return;
 
-    let cancelled = false;
-    // One controller per read rather than one for the effect's lifetime: a second
-    // read would otherwise reuse an already-aborted signal and never resolve.
+    let pending;
     function read() {
+      pending?.abort();
       const controller = new AbortController();
+      pending = controller;
       api("/cart", { signal: controller.signal })
         .then((items) => {
-          if (!cancelled)
+          if (!controller.signal.aborted)
             setCart({
               userId,
               count: items.reduce((n, item) => n + item.quantity, 0),
@@ -42,10 +38,10 @@ export function useCartCount(user) {
     read();
     window.addEventListener(CART_CHANGED_EVENT, read);
     return () => {
-      cancelled = true;
+      pending?.abort();
       window.removeEventListener(CART_CHANGED_EVENT, read);
     };
   }, [userId]);
 
-  return cart.count;
+  return cart.userId === userId ? cart.count : 0;
 }

@@ -1,5 +1,5 @@
-const pool = require("../config/db");
-const q = require("../queries/roleQueries");
+const pool = require("../db/pool");
+const q = require("../db/queries/roleQueries");
 const v = require("../utils/input");
 
 // The same three values the schema's CHECK allows. 'on_delivery' is a courier's
@@ -17,7 +17,7 @@ async function deliveryStatus(req, res) {
     console.error("Get delivery profile error:", error);
     return res
       .status(500)
-      .json({ message: "Could not load your delivery profile." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
+      .json({ message: "Could not load your delivery profile." });
   }
 }
 
@@ -54,7 +54,7 @@ async function updateDeliveryStatus(req, res) {
     console.error("Update delivery profile error:", error);
     return res
       .status(500)
-      .json({ message: "Could not update your delivery profile." }); // 500 Internal Server Error: an unexpected server or database failure occurred.
+      .json({ message: "Could not update your delivery profile." });
   }
 }
 

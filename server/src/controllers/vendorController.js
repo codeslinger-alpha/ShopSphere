@@ -1,8 +1,8 @@
-const pool = require("../config/db");
-const transaction = require("../utils/transaction");
+const pool = require("../db/pool");
+const transaction = require("../db/transaction");
 const v = require("../utils/input");
-const { CREATE_LOCATION } = require("../queries/authQueries");
-const q = require("../queries/vendorQueries");
+const { CREATE_LOCATION } = require("../db/queries/authQueries");
+const q = require("../db/queries/vendorQueries");
 async function shops(req, res) {
   res.json((await pool.query(q.LIST_OWNED_SHOPS, [req.user.user_id])).rows);
 }

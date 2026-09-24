@@ -1,9 +1,9 @@
-const pool = require("../config/db");
+const pool = require("../db/pool");
 const { paginated, parseListQuery } = require("../utils/listQuery");
-const q = require("../queries/paymentQueries");
+const q = require("../db/queries/paymentQueries");
 // The vendor's wholesale purchases already have a query and a screen. This page
 // reuses that read rather than writing a second one that could drift from it.
-const vendor = require("../queries/vendorQueries");
+const vendor = require("../db/queries/vendorQueries");
 
 // =========================================================
 // Admin — the whole ledger

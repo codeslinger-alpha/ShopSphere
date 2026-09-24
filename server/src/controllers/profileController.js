@@ -1,8 +1,8 @@
-const pool = require("../config/db");
-const transaction = require("../utils/transaction");
+const pool = require("../db/pool");
+const transaction = require("../db/transaction");
 const v = require("../utils/input");
-const { CREATE_LOCATION } = require("../queries/authQueries");
-const q = require("../queries/profileQueries");
+const { CREATE_LOCATION } = require("../db/queries/authQueries");
+const q = require("../db/queries/profileQueries");
 async function countries(req, res) {
   res.json(
     (

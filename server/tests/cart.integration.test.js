@@ -5,7 +5,7 @@ const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
-const pool = require("../src/config/db");
+const pool = require("../src/db/pool");
 const { createAuthToken } = require("../src/utils/authToken");
 
 test("cart, catalog and session regressions against PostgreSQL", async (t) => {

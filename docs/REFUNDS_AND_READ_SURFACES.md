@@ -31,7 +31,7 @@ A listing's `in_stock` says how many units the vendor holds. It does not say whi
 batches at different wholesale prices. Paying the newest price for every unit, or the
 oldest, is wrong in a way nobody would notice from the total alone.
 
-`REFUND_ATTRIBUTION` in `server/src/queries/adminCatalogQueries.js` answers it in one
+`REFUND_ATTRIBUTION` in `server/src/db/queries/adminCatalogQueries.js` answers it in one
 statement: walk the listing's purchase rows newest-first, consuming `in_stock` against
 each batch, and stop when the stock runs out. Whatever the purchases do not cover is
 charged at `master_products.wholesale_price` — the fallback for a listing whose stock
@@ -92,7 +92,7 @@ shop holding one, in a single transaction — so either every vendor is paid or 
 
 ## Platform commission
 
-`PLATFORM_COMMISSION_RATE = 0.05`, in `server/src/queries/orderQueries.js`. At placement,
+`PLATFORM_COMMISSION_RATE = 0.05`, in `server/src/db/queries/orderQueries.js`. At placement,
 each `order_items` line records `ROUND(quantity * unit_price * rate, 2)` in its own
 `platform_commission` column, and `RECORD_PLATFORM_COMMISSION` copies the **sum of the
 lines** onto `orders.platform_commission`.
@@ -191,9 +191,9 @@ stays, because that is what a user's role actually points at.
 | Shop-review purchase trigger | `server/sql/migrations/007_shop_review_verification.sql` |
 | Cancellation voids commission | `server/sql/migrations/008_cancel_voids_commission.sql` |
 | The permission tables dropped | `server/sql/migrations/009_drop_permissions.sql` |
-| LIFO attribution, listing and master removal | `server/src/queries/adminCatalogQueries.js` |
-| Commission and courier constants and statements | `server/src/queries/orderQueries.js` |
-| Payments, refunds, vendor books | `server/src/queries/paymentQueries.js` |
-| Shop reviews | `server/src/queries/shopReviewQueries.js` |
+| LIFO attribution, listing and master removal | `server/src/db/queries/adminCatalogQueries.js` |
+| Commission and courier constants and statements | `server/src/db/queries/orderQueries.js` |
+| Payments, refunds, vendor books | `server/src/db/queries/paymentQueries.js` |
+| Shop reviews | `server/src/db/queries/shopReviewQueries.js` |
 | Shared paging and filter parsing | `server/src/utils/listQuery.js` |
 | The rules under test | `server/tests/refund.integration.test.js`, `server/tests/readSurfaces.integration.test.js` |

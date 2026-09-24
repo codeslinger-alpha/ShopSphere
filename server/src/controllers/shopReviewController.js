@@ -1,6 +1,6 @@
-const pool = require("../config/db");
+const pool = require("../db/pool");
 const v = require("../utils/input");
-const q = require("../queries/shopReviewQueries");
+const q = require("../db/queries/shopReviewQueries");
 
 // Mirrors reviewController.js, keyed on a shop. The eligibility rule is the same
 // one the trigger enforces; this copy exists so an ineligible customer is told

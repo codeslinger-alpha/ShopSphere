@@ -5,7 +5,7 @@ const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
-const pool = require("../src/config/db");
+const pool = require("../src/db/pool");
 const { createAuthToken } = require("../src/utils/authToken");
 
 // The administrator's side of the platform: who may be banned, which shops go
@@ -30,21 +30,23 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
     );
     // All API reads/writes in this test use this isolated transaction.
     pool.query = (...args) => client.query(...args);
-    // transaction() calls pool.connect(), which would hand back a *different*
-    // pooled connection — outside this schema and outside this transaction, so
-    // the shop write path would land in the real database. Route it back to the
-    // test client and swallow the nested BEGIN/COMMIT, which would otherwise
-    // close the transaction the savepoints depend on.
-    const transactionControl = new Set(["BEGIN", "COMMIT", "ROLLBACK"]);
-    pool.connect = async () => ({
-      // Async, because the real client returns a promise and transaction()
-      // chains .catch() on the rollback.
-      query: async (text, values) =>
-        transactionControl.has(String(text).trim().toUpperCase())
-          ? { rows: [] }
-          : client.query(text, values),
-      release: () => {},
-    });
+    // Nested API transactions need real rollback semantics within the test schema.
+    let transactionId = 0;
+    pool.connect = async () => {
+      const savepoint = `admin_tx_${++transactionId}`;
+      return {
+        query: async (text, values) => {
+          if (text === "BEGIN") return client.query(`SAVEPOINT ${savepoint}`);
+          if (text === "COMMIT") return client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          if (text === "ROLLBACK") {
+            await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          }
+          return client.query(text, values);
+        },
+        release: () => {},
+      };
+    };
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -87,6 +89,7 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
       });
       return {
         status: response.status,
+        headers: response.headers,
         data: response.status === 204 ? null : await response.json(),
       };
     }
@@ -156,6 +159,31 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
         }
       });
     }
+
+    await check("registration is atomic and admin creation preserves its session", async () => {
+      const body = {
+        name: "Regression Courier", email: "regression@shopsphere.test",
+        password: "regression-password", phone: "01000000099", role: "delivery",
+        street_address: "1 Test Street", city: "Dhaka", country_id: countryId,
+        vehicle_info: "Bicycle",
+      };
+      const register = (path, data = body) => request(path, { method: "POST", body: data });
+      const created = await register("/api/auth/register");
+      assert.equal(created.status, 201, created.data.message);
+      assert.match(created.headers.get("set-cookie"), /shopsphere_token=.*HttpOnly/);
+      assert.equal((await client.query("SELECT vehicle_info FROM delivery_personnel WHERE delivery_person_id=$1", [created.data.user.user_id])).rows[0].vehicle_info, "Bicycle");
+      const locationCount = async () => (await client.query("SELECT count(*)::int AS n FROM locations")).rows[0].n;
+      const before = await locationCount();
+      assert.equal((await register("/api/auth/register")).status, 409);
+      assert.equal(await locationCount(), before, "duplicate registration must roll back its address");
+      const login = await request("/api/auth/login", { method: "POST", body });
+      assert.equal(login.status, 200);
+      assert.match(login.headers.get("set-cookie"), /shopsphere_token=/);
+      const adminCreated = await register("/api/admin/users", { ...body, role: "admin", email: "new-admin@shopsphere.test" });
+      assert.equal(adminCreated.status, 201, adminCreated.data.message);
+      assert.equal(adminCreated.headers.get("set-cookie"), null);
+      assert.equal((await register("/api/auth/register", { ...body, role: "admin" })).status, 400);
+    });
 
     await check(
       "a submitted shop waits as pending and cannot be sold from",

@@ -82,7 +82,7 @@ profile page is labelled "Account settings".
 **Verified.** Same four commands, run together with Step 1 — all green. No test in
 `client/tests/` asserted on the old strings (`My profile`, `Complete my profile`,
 `Save profile`), so nothing needed updating there; the two doc references in
-`WEBSITE_FLOW.md` and `SERVER_DATABASE_FLOW.md` were corrected in this step.
+`WEBSITE_FLOW.md` and `BACKEND.md` were corrected in this step.
 
 ## Step 3 — Imagery
 
@@ -205,7 +205,7 @@ is refunded the wholesale cost of the stock they still hold, computed by LIFO at
 against their actual purchase rows. This is the TODO at the top of `schema.sql`.
 
 **Files.** `server/sql/migrations/006_vendor_refunds.sql` (new), `server/sql/schema.sql`,
-`server/src/queries/adminCatalogQueries.js`, `server/src/controllers/adminCatalogController.js`,
+`server/src/db/queries/adminCatalogQueries.js`, `server/src/controllers/adminCatalogController.js`,
 `server/src/routes/adminRoutes.js`, `server/tests/refund.integration.test.js` (new),
 `client/src/pages/AdminConsolePage.jsx`, `client/src/pages/AdminCatalogPage.jsx`,
 `client/src/App.css`, `client/tests/admin.spec.js`.
@@ -216,9 +216,9 @@ it.
 
 **Verified.** `npm run lint`, `npm run build`, `npm test` (71/71), `npm run test:e2e`
 (39/39) — all green. The 11 new server checks are in
-[`server/tests/refund.integration.test.js`](server/tests/refund.integration.test.js),
+[`server/tests/refund.integration.test.js`](../server/tests/refund.integration.test.js),
 on the same temp-schema-in-a-rolled-back-transaction harness as the order suite; the 3 new
-e2e checks extend [client/tests/admin.spec.js](client/tests/admin.spec.js). The admin
+e2e checks extend [client/tests/admin.spec.js](../client/tests/admin.spec.js). The admin
 expansion was also screenshotted in both themes.
 
 The LIFO test asserts `$53.00` for 7 units against purchases of 5@$9.00 and 5@$4.00. That
@@ -281,7 +281,7 @@ always-zero columns. `shop_reviews` becomes writable and readable, enforced by a
 that mirrors `fn_verify_product_review_purchase`.
 
 **Files.** `server/sql/migrations/007_shop_review_verification.sql` (new),
-`server/sql/schema.sql`, `server/src/queries/{orderQueries,paymentQueries,shopReviewQueries}.js`,
+`server/sql/schema.sql`, `server/src/db/queries/{orderQueries,paymentQueries,shopReviewQueries}.js`,
 `server/src/controllers/{orderController,paymentController,shopReviewController}.js`,
 `server/src/routes/{adminRoutes,roleRoutes}.js`,
 `client/src/pages/{AdminConsolePage,VendorPage,OrderDetailPage,AccountPaymentsPage}.jsx`,
@@ -388,7 +388,7 @@ all four, and the verification table below records what came back.
 and the whole feature is walked manually against the real database.
 
 **Files.** `docs/REFUNDS_AND_READ_SURFACES.md` (new), `docs/UI_AND_THEME.md` (new),
-`docs/WEBSITE_FLOW.md`, `docs/SERVER_DATABASE_FLOW.md`, this file.
+`docs/WEBSITE_FLOW.md`, `docs/BACKEND.md`, this file.
 
 **Done when.** Every box above is ticked, this file's own box included, and the manual
 walkthrough in the plan has been run and its numbers recorded.

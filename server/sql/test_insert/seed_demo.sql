@@ -245,7 +245,7 @@ ON CONFLICT DO NOTHING;
 -- placing and delivering these orders would have produced.
 --
 -- The rates mirror PLATFORM_COMMISSION_RATE, COURIER_BASE_FEE and COURIER_RATE in
--- src/queries/orderQueries.js — the one place they are defined. They are repeated
+-- src/db/queries/orderQueries.js — the one place they are defined. They are repeated
 -- here because a .sql file cannot import a JavaScript constant, and changing a
 -- rate means changing both.
 --

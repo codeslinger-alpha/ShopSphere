@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
-const pool = require("../config/db");
-const { FIND_AUTH_USER_BY_ID } = require("../queries/userQueries");
+const pool = require("../db/pool");
+const { FIND_AUTH_USER_BY_ID } = require("../db/queries/authQueries");
 const {
   AUTH_COOKIE_NAME,
   clearAuthCookie,
@@ -12,7 +12,7 @@ async function requireAuth(req, res, next) {
   const token = req.cookies?.[AUTH_COOKIE_NAME];
 
   if (!token) {
-    return res.status(401).json({ message: "Authentication is required." }); // 401 Unauthorized: valid login credentials or a valid session are required.
+    return res.status(401).json({ message: "Authentication is required." });
   }
 
   try {
@@ -33,7 +33,7 @@ async function requireAuth(req, res, next) {
       clearAuthCookie(res);
       return res
         .status(401)
-        .json({ message: "Your session is no longer valid." }); // 401 Unauthorized: valid login credentials or a valid session are required.
+        .json({ message: "Your session is no longer valid." });
     }
 
     req.user = user;
@@ -47,25 +47,25 @@ async function requireAuth(req, res, next) {
       clearAuthCookie(res);
       return res
         .status(401)
-        .json({ message: "Your session is invalid or has expired." }); // 401 Unauthorized: the login token is invalid.
+        .json({ message: "Your session is invalid or has expired." });
     }
     console.error("Session lookup error:", error);
     return res
       .status(500)
-      .json({ message: "Could not verify your session. Please try again." }); // 500 Internal Server Error: infrastructure failed; preserve the login cookie.
+      .json({ message: "Could not verify your session. Please try again." });
   }
 }
 
 function requireRole(...allowedRoles) {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ message: "Authentication is required." }); // 401 Unauthorized: valid login credentials or a valid session are required.
+      return res.status(401).json({ message: "Authentication is required." });
     }
 
     if (!allowedRoles.includes(req.user.role_name)) {
       return res
         .status(403)
-        .json({ message: "You are not allowed to perform this action." }); // 403 Forbidden: this account is not allowed to perform the action.
+        .json({ message: "You are not allowed to perform this action." });
     }
 
     return next();

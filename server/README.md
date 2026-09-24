@@ -1,8 +1,8 @@
 # ShopSphere API
 
 Express + PostgreSQL with raw parameterized SQL and no ORM. The API uses the
-shared pool in `src/config/db.js`, routes in `src/routes/`, feature controllers
-in `src/controllers/`, query constants in `src/queries/` and shared validation,
+shared pool in `src/db/pool.js`, routes in `src/routes/`, feature controllers
+in `src/controllers/`, query constants in `src/db/queries/` and shared validation,
 transactions and authentication middleware. Express serves `/api/...` only.
 
 Run commands from the repository root: `npm install`, `npm run dev:server`.
@@ -10,6 +10,8 @@ Configure `server/.env` from `.env.example`. Use `npm run db:init` for a new emp
 database, or `npm run db:migrate` for an existing ShopSphere database, followed
 by `npm run db:seed` for local demo data. Never rerun the fresh schema over existing
 tables. Migrations preserve data and the demo seed skips existing matching rows.
+
+[Backend file, API and database guide](../docs/BACKEND.md)
 
 [Complete setup, demo credentials, endpoint reference and website flow](../docs/WEBSITE_FLOW.md)
 

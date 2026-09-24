@@ -15,7 +15,7 @@ inside one database transaction: it walks the cart in `prod_id` order, subtracti
 each line's quantity from `products.in_stock` with a single conditional `UPDATE`
 that fails if the stock is no longer there, then inserts the order, its items, and
 a `pending` cash-on-delivery payment row, assigns an available courier, and
-deletes the cart. Any failure — a listing that sold out, an address that does not
+deletes the purchased cart rows. Any failure — a listing that sold out, an address that does not
 exist, any error at all — rolls the whole transaction back, so an order either
 exists complete with its stock claimed or nothing happened. Payment is cash on
 delivery: the money is recorded as owed at checkout and settled when the courier
@@ -51,7 +51,7 @@ re-checks.
 
 The fix is to make the test and the decrement one statement, so PostgreSQL
 evaluates them while it holds the row's write lock
-([`CLAIM_STOCK`](../server/src/queries/orderQueries.js)):
+([`CLAIM_STOCK`](../server/src/db/queries/orderQueries.js)):
 
 ```sql
 UPDATE products p SET in_stock = p.in_stock - $2
@@ -92,7 +92,7 @@ The claim loop runs one `UPDATE` per cart line. If two multi-item orders took
 their rows in different sequences — one claiming A then B, the other B then A —
 each would hold what the other wants and PostgreSQL would have to kill one. The
 controller therefore claims in the order the query returns, and
-`CART_FOR_ORDER` ends with `ORDER BY c.prod_id`. Every checkout on the system
+`CART_FOR_ORDER` uses `ORDER BY c.prod_id` before `FOR UPDATE OF c`. Every checkout on the system
 walks the listings in the same sequence, so a conflict becomes a wait, never a
 deadlock.
 
@@ -100,7 +100,7 @@ deadlock.
 
 The claim loop is a series of writes, so a failure part way through would leave
 stock subtracted for an order that was never created. Everything runs inside
-`transaction(work)` from [`utils/transaction.js`](../server/src/utils/transaction.js),
+`transaction(work)` from [`db/transaction.js`](../server/src/db/transaction.js),
 which issues `BEGIN`, commits only if the callback returns, and rolls back on any
 error. The `v.fail(409, ...)` for a short line is thrown from inside that
 callback, so by the time the response is written every claim already made in that
@@ -112,16 +112,16 @@ Inside one transaction, in this order:
 
 | Step | Statement | Note |
 | --- | --- | --- |
-| 1 | `CART_FOR_ORDER` | Empty cart → `400`. Ordered by `prod_id`. |
+| 1 | `CART_FOR_ORDER` | Empty cart → `400`. Locks cart rows in `prod_id` order. |
 | 2 | `CLAIM_STOCK` per line | `rowCount 0` → `409`, whole transaction rolls back. |
 | 3 | `CREATE_LOCATION` or `USER_PROFILE_ADDRESS` | A supplied address becomes a new `locations` row; otherwise the profile's `users.address` is used. Neither → `400` naming the profile. |
 | 4 | `FIND_AVAILABLE_COURIER` | Fewest open orders first; `NULL` when nobody is available. |
 | 5 | `CREATE_ORDER` | `total_amount` is deliberately **not** written — the trigger owns it. |
-| 6 | `CREATE_ORDER_ITEM` per line | `unit_price` is the cart's snapshot, so a later price change cannot rewrite what was agreed. The line also records its own `platform_commission` — `ROUND(quantity × unit_price × rate, 2)`. |
+| 6 | `CREATE_ORDER_ITEM` per line | `unit_price` is read during checkout and then stored on the order item; an earlier cart-page price is not reserved. The line also records its own `platform_commission` — `ROUND(quantity × unit_price × rate, 2)`. |
 | 7 | `RECORD_PLATFORM_COMMISSION` | Copies the **sum of the lines** onto `orders.platform_commission`. Per line then summed, not the order total times the rate: the two disagree whenever a line does not divide evenly. `total_amount` is still `trg_order_items_recalc_total`'s alone. |
 | 8 | `ORDER_TOTALS` | Reads back `total_amount` after `trg_order_items_recalc_total` has written it. The database is the authority, not a sum in the controller. |
 | 9 | `CREATE_PAYMENT` | `amount = total_amount + delivery_cost`, `'cash_on_delivery'`, `'pending'`, `paid_at = NULL`. |
-| 10 | `CLEAR_CART` | `DELETE FROM cart_items WHERE user_id = $1`. |
+| 10 | `CLEAR_CART` | `DELETE` only the purchased product IDs for this user; preserve later additions. |
 
 ### Why `paid_at` is written explicitly as `NULL`
 
@@ -266,15 +266,14 @@ Proven:
 - the claim is a single statement whose predicate includes the stock test, and the
   `CHECK (in_stock >= 0)` constraint is present as the backstop.
 
-**Not** proven: true parallel contention. The test harness runs one database
-session, and savepoints nest inside it, so two simulated concurrent checkouts
-cannot actually contend for a row lock — a simulated "loser" whose savepoint is
-outermost would roll back more than its own work. The suite therefore asserts the
-atomic statement and the constraint directly instead of claiming a race it cannot
-reproduce. The Playwright suite cannot settle it either, since every API response
-there is mocked. Seeing the real behavior needs two live connections — two
-browsers signed in as two customers, buying the last unit of a one-unit listing
-at the same moment — and that is the honest manual check.
+The order suite uses one database session, so its savepoints prove rollback but
+cannot reproduce parallel lock contention. The separate
+`server/tests/concurrency.integration.test.js` uses independent PostgreSQL
+connections in a disposable schema: it pauses checkout after the cart read,
+starts another checkout, adds a different item, and verifies that the original
+cart is purchased once while the new item remains. Concurrent different-customer
+last-unit contention is still not covered by that test. Browser tests mock the
+API and do not exercise database locks.
 
 ## Terminal output
 
@@ -282,10 +281,10 @@ Two loggers make the server's work visible while developing, both gated by
 `utils/logging.js` (an explicit `LOG_SQL` / `LOG_REQUESTS` wins; otherwise on
 outside production).
 
-- **SQL** — `utils/sqlLogger.js` wraps both choke points, `pool.query` in
-  `config/db.js` and the transactional client in `utils/transaction.js`, and
-  prints one collapsed line per statement with its duration, row count and
-  parameters. A failed statement logs its PostgreSQL error code.
+- **SQL** — `db/logger.js` wraps both choke points, `pool.query` in
+  `db/pool.js` and the transactional client in `db/transaction.js`, and
+  prints one collapsed line per statement with its duration and row count,
+  omitting bound parameter values. A failed statement logs its PostgreSQL error code.
 - **Requests** — `middleware/requestLogger.js` prints one line per request with
   status, method, path, duration and user id. Errors that reach
   `errorMiddleware` are logged with the same shape, including the `4xx` responses

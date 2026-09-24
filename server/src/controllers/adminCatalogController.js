@@ -1,7 +1,7 @@
-const pool = require("../config/db");
-const transaction = require("../utils/transaction");
+const pool = require("../db/pool");
+const transaction = require("../db/transaction");
 const v = require("../utils/input");
-const q = require("../queries/adminCatalogQueries");
+const q = require("../db/queries/adminCatalogQueries");
 function attachMasterAttributes(masters, rows) {
   const attributesByMaster = new Map();
   for (const row of rows) {

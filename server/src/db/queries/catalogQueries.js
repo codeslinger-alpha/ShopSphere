@@ -1,4 +1,6 @@
-const { escapeLikePattern } = require("../utils/sql");
+const CHECK_DATABASE_CONNECTION = "SELECT 1 AS database_connected";
+
+const { escapeLikePattern } = require("../sql");
 
 const LIST_ROLES = `
     SELECT role_id, role_name, description
@@ -176,6 +178,7 @@ const LIST_SHOPS = `
 `;
 
 module.exports = {
+  CHECK_DATABASE_CONNECTION,
   GET_PRODUCT_BY_ID,
   GET_MASTER_ATTRIBUTE_VALUES,
   LIST_CATEGORIES,
