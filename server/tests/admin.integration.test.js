@@ -261,6 +261,17 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
         assert.equal(approved.status, 200);
         assert.equal(approved.data.shop.active_status, "active");
 
+        // A shop starts with no capital and buying stock debits its balance, so
+        // the first purchase has to be funded. This goes through the recharge
+        // endpoint a vendor would use rather than a direct UPDATE, because that
+        // is the path the console offers and the one the balance depends on.
+        const funded = await request("/api/vendor/topups", {
+          user: vendor,
+          method: "POST",
+          body: { shop_id: shop.shop_id, amount: "100.00", method: "card" },
+        });
+        assert.equal(funded.status, 201, funded.data.message);
+
         const purchase = await request("/api/vendor/listings", {
           user: vendor,
           method: "POST",

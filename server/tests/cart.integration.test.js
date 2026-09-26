@@ -26,6 +26,22 @@ test("cart, catalog and session regressions against PostgreSQL", async (t) => {
     );
     // All API reads/writes in this test use this isolated transaction.
     pool.query = (...args) => client.query(...args);
+    let transactionId = 0;
+    pool.connect = async () => {
+      const savepoint = `cart_tx_${++transactionId}`;
+      return {
+        query: async (text, values) => {
+          if (text === "BEGIN") return client.query(`SAVEPOINT ${savepoint}`);
+          if (text === "COMMIT") return client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          if (text === "ROLLBACK") {
+            await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          }
+          return client.query(text, values);
+        },
+        release: () => {},
+      };
+    };
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;

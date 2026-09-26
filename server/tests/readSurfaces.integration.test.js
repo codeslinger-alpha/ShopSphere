@@ -9,17 +9,16 @@ const pool = require("../src/db/pool");
 const {
   COURIER_BASE_FEE,
   COURIER_RATE,
-  PLATFORM_COMMISSION_RATE,
 } = require("../src/db/queries/orderQueries");
 const { createAuthToken } = require("../src/utils/authToken");
 
-// The read surfaces added for the tables nobody could reach, and the two columns
-// they made stop being always-zero: orders.platform_commission and
-// delivery_personnel.earnings.
+// The read surfaces added for the tables nobody could reach, and the column they
+// made stop being always-zero: delivery_personnel.earnings.
 //
 // Two things are being proven, and they are different in kind. The first is
-// arithmetic: a commission is the sum of its lines and a courier is paid base
-// plus a share, and neither is a number a reader can check by eye. The second is
+// arithmetic: an order's delivery charge is a base plus a share of its goods, the
+// payment is the goods plus that charge, and the courier is paid exactly the
+// charge. None of those is a number a reader can check by eye. The second is
 // scope: every one of these endpoints is keyed on the caller's own identity, and
 // the checks below are mostly about what a caller must NOT see — a vendor's
 // neighbour's takings, another customer's payments, an unearned review.
@@ -123,10 +122,6 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     const techCorner = await shopId("Demo Tech Corner");
     const gadgetHouse = await shopId("Demo Gadget House");
     const keyboard = await listingId("Demo Tech Corner", "Demo Wireless Keyboard");
-    const headphones = await listingId(
-      "Demo Tech Corner",
-      "Demo Bluetooth Headphones",
-    );
 
     const setStock = (prodId, quantity) =>
       client.query("UPDATE products SET in_stock = $2 WHERE prod_id = $1", [
@@ -166,22 +161,12 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       });
     };
 
-    const commissionOf = async (id) =>
+    const deliveryCostOf = async (id) =>
       Number(
         (
-          await one(
-            "SELECT platform_commission FROM orders WHERE order_id = $1",
-            [id],
-          )
-        ).platform_commission,
+          await one("SELECT delivery_cost FROM orders WHERE order_id = $1", [id])
+        ).delivery_cost,
       );
-    const lineCommissionOf = async (id) =>
-      (
-        await client.query(
-          "SELECT platform_commission FROM order_items WHERE order_id = $1",
-          [id],
-        )
-      ).rows.map((row) => Number(row.platform_commission));
     const deliveryEarnings = async () =>
       Number(
         (
@@ -191,10 +176,10 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
           )
         ).earnings,
       );
-    const shopEarnings = async (id) =>
+    const shopBalance = async (id) =>
       Number(
-        (await one("SELECT earnings FROM shops WHERE shop_id = $1", [id]))
-          .earnings,
+        (await one("SELECT balance FROM shops WHERE shop_id = $1", [id]))
+          .balance,
       );
     // Two decimals, the way the database rounds it, so a float artefact in the
     // test's own arithmetic cannot fail a correct implementation.
@@ -212,34 +197,30 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     }
 
     await check(
-      "an order records the commission on every line, and on itself",
+      "an order prices its trip, and the customer's payment includes it",
       async () => {
-        // Two lines of three units at 10.10. Each line's commission is
-        // ROUND(30.30 * 0.05) = 1.52, so the order is 3.04 — while the same rate
-        // applied to the order's 60.60 total would give 3.03. The gap is the
-        // whole reason the lines are summed rather than the total multiplied, and
-        // a seeded price that rounded evenly would not show it.
+        // Three units at 10.10 is 30.30 of goods, so the trip is
+        // 3 + 0.02 × 30.30 = 3.61 and the customer owes 33.91. The two halves have
+        // to be checked separately from the sum, because a payment that merely
+        // equalled the goods would also be "a number".
         await setPrice(keyboard, "10.10");
-        await setPrice(headphones, "10.10");
         await setStock(keyboard, 10);
-        await setStock(headphones, 10);
-        await setCart(customer.user_id, [
-          [keyboard, 3],
-          [headphones, 3],
-        ]);
+        await setCart(customer.user_id, [[keyboard, 3]]);
 
         const placed = await placeOrder(customer);
         assert.equal(placed.status, 201, placed.data.message);
         const id = placed.data.order.order_id;
 
-        assert.deepEqual(await lineCommissionOf(id), [1.52, 1.52]);
-        assert.equal(await commissionOf(id), 3.04);
-        assert.notEqual(await commissionOf(id), cents(60.6 * PLATFORM_COMMISSION_RATE));
-        assert.equal(Number(placed.data.order.total_amount), 60.6);
+        assert.equal(Number(placed.data.order.total_amount), 30.3);
+        const expected = cents(COURIER_BASE_FEE + COURIER_RATE * 30.3);
+        assert.equal(Number(placed.data.order.delivery_cost), expected);
+        assert.equal(await deliveryCostOf(id), expected);
 
-        // The margin is not the buyer's business, so it is not in the checkout
-        // response either.
-        assert.equal("platform_commission" in placed.data.order, false);
+        const payment = await one(
+          "SELECT amount FROM payments WHERE order_id = $1",
+          [id],
+        );
+        assert.equal(Number(payment.amount), cents(30.3 + expected));
       },
     );
 
@@ -249,12 +230,15 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       await setCart(customer.user_id, [[keyboard, 2]]);
       const placed = await placeOrder(customer);
       const id = placed.data.order.order_id;
-      const total = Number(placed.data.order.total_amount);
+      // What the customer was charged for the trip, which is what the courier is
+      // paid for it. Read from the order rather than recomputed, so the check is
+      // that settlement honours the stored figure.
+      const expected = await deliveryCostOf(id);
+      assert.equal(Number(placed.data.order.delivery_cost), expected);
       assert.equal(placed.data.order.delivery_person_id, courier.user_id);
 
       const delivered = await deliver(courier, id);
       assert.equal(delivered.status, 200, delivered.data.message);
-      const expected = cents(COURIER_BASE_FEE + COURIER_RATE * total);
       assert.equal(await deliveryEarnings(), cents(before + expected));
       assert.equal(
         Number(delivered.data.order.courier_earnings.earnings),
@@ -272,12 +256,16 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       assert.equal(await deliveryEarnings(), cents(before + expected));
     });
 
-    await check("cancelling an order voids the commission it recorded", async () => {
+    await check("cancelling an order fails the payment it recorded", async () => {
       await setStock(keyboard, 5);
       await setCart(customer.user_id, [[keyboard, 2]]);
       const placed = await placeOrder(customer);
       const id = placed.data.order.order_id;
-      assert.ok(await commissionOf(id) > 0);
+      const owed = await one(
+        "SELECT payment_status FROM payments WHERE order_id = $1",
+        [id],
+      );
+      assert.equal(owed.payment_status, "pending");
 
       const cancelled = await request(`/api/orders/${id}/cancel`, {
         user: customer,
@@ -285,16 +273,24 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       });
       assert.equal(cancelled.status, 200, cancelled.data.message);
 
-      // A cancelled order earned the platform nothing, and the admin payments
-      // screen shows commission per payment — a positive figure beside a failed
-      // payment would read as revenue that never existed.
-      assert.equal(await commissionOf(id), 0);
-      assert.deepEqual(await lineCommissionOf(id), [0]);
+      // A cancelled order returns its stock and fails its payment. The delivery
+      // charge stays on the row as the quote it was, but nothing was ever
+      // collected against it and no courier was paid — the payment is failed, not
+      // left pending, so it cannot later look like money owed.
       const payment = await one(
-        "SELECT payment_status FROM payments WHERE order_id = $1",
+        "SELECT payment_status, paid_at FROM payments WHERE order_id = $1",
         [id],
       );
       assert.equal(payment.payment_status, "failed");
+      assert.equal(payment.paid_at, null);
+      assert.equal(
+        (
+          await one("SELECT delivery_person_id FROM orders WHERE order_id = $1", [
+            id,
+          ])
+        ).delivery_person_id,
+        null,
+      );
     });
 
     await check(
@@ -313,19 +309,16 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         assert.equal(row.payment_status, "completed");
         assert.equal(row.payment_method, "cash_on_delivery");
         assert.ok(row.paid_at, "a completed payment carries the moment it settled");
-        // The payment is the goods plus the delivery, and the two halves are on
-        // the row so the arithmetic can be seen rather than trusted.
+        // The payment is the goods plus the trip. There is nothing between the
+        // customer and the shop beyond the courier's charge, so these three
+        // numbers are the whole of the money.
         assert.equal(
           Number(row.amount),
           Number(row.total_amount) + Number(row.delivery_cost),
         );
-        // Non-zero because the seed fills it the way placement would. Before the
-        // rule existed this column was 0 everywhere and this check was vacuous.
-        assert.ok(Number(row.platform_commission) > 0);
-        const lines = await lineCommissionOf(seeded);
-        assert.equal(
-          Number(row.platform_commission),
-          cents(lines.reduce((sum, value) => sum + value, 0)),
+        assert.ok(
+          Number(row.delivery_cost) > 0,
+          "the seed prices trips the way placement does",
         );
 
         const completed = await request("/api/admin/payments?status=completed");
@@ -405,8 +398,21 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
           [...ids].sort((a, b) => a - b),
           [...owned].sort((a, b) => a - b),
         );
-        // The platform's cut is not on the customer's row.
-        assert.equal("platform_commission" in mine.data[0], false);
+        // The customer sees the two halves of their own money and nothing else:
+        // what the goods cost, what the trip cost, and what they paid. There is
+        // no third party's cut to hide, because there is no third party.
+        assert.deepEqual(Object.keys(mine.data[0]).sort(), [
+          "amount",
+          "created_at",
+          "delivery_cost",
+          "order_id",
+          "order_status",
+          "paid_at",
+          "payment_method",
+          "payment_status",
+          "total_amount",
+          "transaction_id",
+        ]);
 
         const theirs = await request("/api/account/payments", { user: customer2 });
         assert.equal(theirs.status, 200);
@@ -431,7 +437,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
 
         const ownedShops = (
           await client.query(
-            "SELECT shop_id, name, earnings FROM shops WHERE owner = $1",
+            "SELECT shop_id, name, balance FROM shops WHERE owner = $1",
             [vendor.user_id],
           )
         ).rows;
@@ -475,39 +481,40 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
           [vendor.user_id],
         );
         assert.equal(Number(totals.gross_sales), Number(gross.value));
+        // There is no commission, so what the shop sold is what the shop is owed:
+        // the headline figure is the whole of the revenue and there is no second
+        // one derived from it.
+        assert.equal("commission_paid" in totals, false);
+        assert.equal("net_sales" in totals, false);
         assert.equal(
-          Number(totals.net_sales),
-          cents(Number(totals.gross_sales) - Number(totals.commission_paid)),
-        );
-        assert.equal(
-          Number(totals.earnings_balance),
+          Number(totals.balance_total),
           cents(
-            ownedShops.reduce((sum, shop) => sum + Number(shop.earnings), 0),
+            ownedShops.reduce((sum, shop) => sum + Number(shop.balance), 0),
           ),
         );
         assert.equal(
-          Number(shops.find((shop) => shop.shop_id === techCorner).earnings),
-          await shopEarnings(techCorner),
+          Number(shops.find((shop) => shop.shop_id === techCorner).balance),
+          await shopBalance(techCorner),
         );
 
         // A removal pays into the balance this screen reads, so the two numbers
         // move together rather than being unrelated readings of the same column.
         await setStock(keyboard, 3);
-        const before = await shopEarnings(techCorner);
+        const before = await shopBalance(techCorner);
         const removed = await request(`/api/admin/listings/${keyboard}/discontinue`, {
           method: "PUT",
         });
         const paid = Number(removed.data.refund.amount);
         assert.ok(paid > 0);
-        assert.equal(await shopEarnings(techCorner), cents(before + paid));
+        assert.equal(await shopBalance(techCorner), cents(before + paid));
         const after = await request("/api/vendor/payments", { user: vendor });
         assert.equal(
           Number(after.data.totals.refunds_received),
           paid,
         );
         assert.equal(
-          Number(after.data.totals.earnings_balance),
-          cents(Number(totals.earnings_balance) + paid),
+          Number(after.data.totals.balance_total),
+          cents(Number(totals.balance_total) + paid),
         );
 
         // The neighbouring vendor's takings are not visible in any form: their

@@ -7,6 +7,7 @@ const reviews = require("../controllers/reviewController");
 const shopReviews = require("../controllers/shopReviewController");
 const payments = require("../controllers/paymentController");
 const role = require("../controllers/roleController");
+const returns = require("../controllers/returnController");
 const order = require("../controllers/orderController");
 const router = express.Router();
 router.get("/countries", profile.countries);
@@ -62,6 +63,10 @@ router.get(
   requireRole("customer"),
   payments.accountPayments,
 );
+// The customer's own returns, and the request that starts one. Scoped to the
+// caller inside every query, like the payment history above it.
+router.get("/returns", requireAuth, requireRole("customer"), returns.mine);
+router.post("/returns", requireAuth, requireRole("customer"), returns.request);
 router.use("/vendor", requireAuth, requireRole("vendor"));
 router.get("/vendor/shops", vendor.shops);
 router.post("/vendor/shops", vendor.saveShop);
@@ -71,10 +76,26 @@ router.get("/vendor/listings", vendor.listings);
 router.post("/vendor/listings", vendor.buy);
 router.put("/vendor/listings/:productId", vendor.updateListing);
 router.get("/vendor/purchases", vendor.purchases);
-// Sales, purchases, refunds and the earnings balance in one response: the four
+// Sales, purchases, refunds and the shop balance in one response: the four
 // belong on one screen, and four round trips to build one page is three more
 // than it needs.
 router.get("/vendor/payments", payments.vendorPayments);
+// The balance and the movements behind it, and the recharge that credits it.
+// The shop is named in the query string because a vendor may own several; the
+// query is still scoped by owner, so naming another vendor's shop finds nothing.
+router.get("/vendor/balance", vendor.balance);
+router.post("/vendor/topups", vendor.topUp);
+// Income over time and by listing. `group_by` is day, week or month and is
+// checked against a closed set on the server; the scope is the session's shops
+// either way.
+router.get("/vendor/statistics", vendor.statistics);
+// The returns a vendor has to decide on, and the two decisions plus the restock.
+// Each is one step of the flow, so each is its own route rather than one endpoint
+// that takes whatever new status the caller names.
+router.get("/vendor/returns", returns.forVendor);
+router.put("/vendor/returns/:returnId/approve", returns.approve);
+router.put("/vendor/returns/:returnId/reject", returns.reject);
+router.put("/vendor/returns/:returnId/restock", returns.restock);
 router.use("/delivery", requireAuth, requireRole("delivery"));
 router.get("/delivery/profile", role.deliveryStatus);
 router.put("/delivery/profile", role.updateDeliveryStatus);
@@ -82,5 +103,9 @@ router.put("/delivery/profile", role.updateDeliveryStatus);
 // guard rather than the customer one in orderRoutes.js.
 router.get("/delivery/deliveries", order.listDeliveries);
 router.put("/delivery/orders/:orderId/status", order.advanceDelivery);
+// The pickups: approved returns waiting for a courier, and the one transition
+// that takes one off that list.
+router.get("/delivery/returns", returns.forCourier);
+router.put("/delivery/returns/:returnId/collect", returns.collect);
 // The /admin surface lives in adminRoutes.js, mounted at /api/admin.
 module.exports = router;

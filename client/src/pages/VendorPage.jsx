@@ -123,9 +123,11 @@ function ListingEditor({ listing, onSave, busy }) {
 // up the tables below. Those tables are not paginated, but they are the whole
 // history, and a screen that sums whatever it happens to be showing would start
 // disagreeing with itself the moment either changed.
-function VendorPayments() {
-  const books = useResource("/vendor/payments");
-
+//
+// The resource is loaded by the page rather than here so the returns panel below
+// can reload it: accepting a return moves the balance, and a headline figure that
+// kept showing the old number on the same screen would be worse than no figure.
+function VendorPayments({ books }) {
   if (books.isLoading) return <p role="status">Loading your books…</p>;
   if (books.error)
     return (
@@ -144,13 +146,14 @@ function VendorPayments() {
         <h2>The balance</h2>
         <dl className="order-facts">
           <div>
-            <dt>Owed to you</dt>
+            <dt>Balance</dt>
             <dd>
-              {money(totals.earnings_balance)}
+              {money(totals.balance_total)}
               <br />
               <span className="muted">
-                Refunds the platform paid you for removed stock. It is a running
-                balance, not money transferred.
+                Sales and recharges in, wholesale buying and approved returns out.
+                This is what you spend on stock.{" "}
+                <Link to="/vendor/balance">Recharge it</Link>.
               </span>
             </dd>
           </div>
@@ -160,8 +163,8 @@ function VendorPayments() {
               {money(totals.gross_sales)}
               <br />
               <span className="muted">
-                Less {money(totals.commission_paid)} platform commission ={" "}
-                {money(totals.net_sales)} net. Cancelled orders are excluded.
+                The whole of what you sold — nothing is withheld. Cancelled orders
+                are excluded.
               </span>
             </dd>
           </div>
@@ -186,7 +189,7 @@ function VendorPayments() {
         </dl>
         {shops.map((shop) => (
           <p key={shop.shop_id} className="muted">
-            {shop.name}: {money(shop.earnings)} ·{" "}
+            {shop.name}: {money(shop.balance)} ·{" "}
             <span className={`status-pill status-${shop.active_status}`}>
               {shop.active_status}
             </span>
@@ -210,8 +213,6 @@ function VendorPayments() {
                 <th>Quantity</th>
                 <th>Unit price</th>
                 <th>Subtotal</th>
-                <th>Commission</th>
-                <th>Net to you</th>
                 <th>Order</th>
               </tr>
             </thead>
@@ -233,8 +234,6 @@ function VendorPayments() {
                   <td>{sale.quantity}</td>
                   <td>{money(sale.unit_price)}</td>
                   <td>{money(sale.subtotal)}</td>
-                  <td>{money(sale.platform_commission)}</td>
-                  <td>{money(sale.net_to_shop)}</td>
                   <td>
                     <span className={`status-pill status-${sale.order_status}`}>
                       {sale.order_status}
@@ -334,11 +333,218 @@ function VendorPayments() {
   );
 }
 
+// The returns a vendor has to deal with, and the three things they can do about
+// one. They are grouped by what the return is waiting for rather than by date,
+// because this is a work queue: an approved return the customer is waiting to
+// hand over and a parcel sitting in the shop are different jobs, and a single
+// dated list would leave the vendor working out which is which.
+//
+// The two decisions are separate buttons rather than one form with a status
+// field, because they are not variations of a setting — one refunds the customer
+// and one does not, and a mis-click between them costs money the wrong way.
+function VendorReturns({ onBalanceChanged }) {
+  const returns = useResource("/vendor/returns");
+  const task = useTask();
+  const [notes, setNotes] = useState({});
+
+  const list = returns.data ?? [];
+  const waiting = list.filter((item) => item.status === "requested");
+  const inTransit = list.filter(
+    (item) => item.status === "approved" || item.status === "collected",
+  );
+  const settled = list.filter((item) =>
+    ["rejected", "restocked"].includes(item.status),
+  );
+
+  async function decide(item, action) {
+    const ok = await task.run(() =>
+      api(`/vendor/returns/${item.return_id}/${action}`, {
+        method: "PUT",
+        body: JSON.stringify({ decision_note: notes[item.return_id] || "" }),
+      }),
+    );
+    if (ok) {
+      returns.reload();
+      onBalanceChanged();
+    }
+  }
+
+  async function restock(item) {
+    const ok = await task.run(() =>
+      api(`/vendor/returns/${item.return_id}/restock`, { method: "PUT" }),
+    );
+    if (ok) returns.reload();
+  }
+
+  return (
+    <>
+      <h2>Returns from customers</h2>
+      <Feedback error={task.error || returns.error} message={task.message} />
+
+      {waiting.length === 0 ? (
+        <p className="empty-state">
+          Nothing is waiting for a decision. A customer can ask to return
+          something once their order has been delivered.
+        </p>
+      ) : (
+        waiting.map((item) => (
+          <article className="panel" key={item.return_id}>
+            <h3>
+              {item.listing_name}{" "}
+              <span className="muted">× {item.quantity}</span>
+            </h3>
+            <dl className="order-facts">
+              <div>
+                <dt>Order</dt>
+                <dd>#{item.order_id}</dd>
+              </div>
+              <div>
+                <dt>Customer</dt>
+                <dd>{item.customer_name}</dd>
+              </div>
+              <div>
+                <dt>Shop</dt>
+                <dd>{item.shop_name}</dd>
+              </div>
+              <div>
+                <dt>Refund if you accept</dt>
+                <dd>${item.refund_amount}</dd>
+              </div>
+            </dl>
+            <p className="muted">
+              They said: {item.reason}. Accepting refunds them from your balance
+              straight away and sends a courier for the parcel; the units go back
+              on sale when you mark it restocked.
+            </p>
+            <label>
+              Note to the customer
+              <input
+                value={notes[item.return_id] || ""}
+                maxLength="2000"
+                onChange={(event) =>
+                  setNotes({ ...notes, [item.return_id]: event.target.value })
+                }
+                placeholder="Optional when you accept; required if you decline"
+              />
+            </label>
+            <p>
+              <button
+                className="primary"
+                disabled={task.busy}
+                onClick={() => decide(item, "approve")}
+              >
+                Accept and refund ${item.refund_amount}
+              </button>{" "}
+              <button
+                disabled={task.busy || !notes[item.return_id]?.trim()}
+                onClick={() => decide(item, "reject")}
+              >
+                Decline
+              </button>
+            </p>
+          </article>
+        ))
+      )}
+
+      {inTransit.length > 0 && (
+        <>
+          <h2>On their way back</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Listing</th>
+                  <th scope="col">Units</th>
+                  <th scope="col">Refunded</th>
+                  <th scope="col">Courier</th>
+                  <th scope="col">Waiting for</th>
+                  <th scope="col" />
+                </tr>
+              </thead>
+              <tbody>
+                {inTransit.map((item) => (
+                  <tr key={item.return_id}>
+                    <td>{item.listing_name}</td>
+                    <td>{item.quantity}</td>
+                    <td>${item.refund_amount}</td>
+                    <td>{item.collected_by_name || "A courier"}</td>
+                    <td>
+                      <span className={`status-pill status-${item.status}`}>
+                        {item.status}
+                      </span>
+                    </td>
+                    <td>
+                      {/* The refund was paid on approval, so restocking moves
+                          stock and no money — and only after the courier has
+                          actually handed the parcel over. */}
+                      <button
+                        disabled={task.busy || item.status !== "collected"}
+                        onClick={() => restock(item)}
+                      >
+                        {item.status === "collected"
+                          ? "Mark back in stock"
+                          : "Not collected yet"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {settled.length > 0 && (
+        <>
+          <h2>Return history</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Return / date</th>
+                  <th scope="col">Listing</th>
+                  <th scope="col">Units</th>
+                  <th scope="col">Refund</th>
+                  <th scope="col">Outcome</th>
+                  <th scope="col">Your note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {settled.map((item) => (
+                  <tr key={item.return_id}>
+                    <td>
+                      #{item.return_id}
+                      <br />
+                      <span className="muted">
+                        {new Date(item.created_at).toLocaleDateString()}
+                      </span>
+                    </td>
+                    <td>{item.listing_name}</td>
+                    <td>{item.quantity}</td>
+                    <td>${item.refund_amount}</td>
+                    <td>
+                      <span className={`status-pill status-${item.status}`}>
+                        {item.status}
+                      </span>
+                    </td>
+                    <td className="muted">{item.decision_note || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 export default function VendorPage({ page }) {
   const shops = useResource("/vendor/shops"),
     masters = useResource("/vendor/master-products"),
     listings = useResource("/vendor/listings"),
     purchases = useResource("/vendor/purchases"),
+    books = useResource(page === "payments" ? "/vendor/payments" : ""),
     task = useTask();
   const [shop, setShop] = useState({}),
     [selected, setSelected] = useState(""),
@@ -364,6 +570,8 @@ export default function VendorPage({ page }) {
       <nav className="tabs">
         <Link to="/vendor/shops">My shops</Link>
         <Link to="/vendor/inventory">Inventory and purchases</Link>
+        <Link to="/vendor/balance">Balance</Link>
+        <Link to="/vendor/statistics">Income</Link>
         <Link to="/vendor/payments">Payments</Link>
       </nav>
       <Feedback
@@ -377,7 +585,10 @@ export default function VendorPage({ page }) {
         message={task.message}
       />
       {page === "payments" ? (
-        <VendorPayments />
+        <>
+          <VendorPayments books={books} />
+          <VendorReturns onBalanceChanged={books.reload} />
+        </>
       ) : page === "shops" ? (
         <div className="workspace-grid">
           <section>
@@ -390,7 +601,7 @@ export default function VendorPage({ page }) {
                     <span className={`status-pill status-${s.active_status}`}>
                       {s.active_status}
                     </span>{" "}
-                    · {s.city} · Earnings {s.earnings}
+                    · {s.city} · Balance {s.balance}
                   </p>
                   <p>
                     ID {s.shop_id} · Owner {s.owner} · Created{" "}

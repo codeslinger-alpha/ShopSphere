@@ -1,7 +1,7 @@
 // The money surfaces. Every read here answers some version of "where did the
 // money go", and each one is scoped to exactly one role's right to ask:
 //
-//   admin    — every payment, every vendor refund, and the commission on each order
+//   admin    — every payment, every vendor refund, and the delivery charge on each order
 //   vendor   — what they paid out, what they took in, and what they were refunded
 //   customer — their own payments, and nothing else
 //
@@ -50,9 +50,8 @@ function searchCondition(values, term, columns, orderRef) {
 // two halves fn_recalc_order_total keeps apart, and pay.amount is their sum, so
 // showing all three is what lets an admin see that the arithmetic holds.
 //
-// platform_commission is read here rather than from order_items: the order-level
-// column is the sum of the lines, and it is zeroed when an order is cancelled
-// (migrations/008), so a failed payment never shows platform revenue beside it.
+// That sum is the whole of the customer's money: the goods go to the shops and
+// the delivery charge goes to the courier, so nothing is withheld in between.
 function buildPaymentListQuery({ q: term, status, method, page, limit }) {
   const values = [];
   const conditions = [];
@@ -80,7 +79,6 @@ function buildPaymentListQuery({ q: term, status, method, page, limit }) {
              o.order_id, o.order_status, o.created_at AS order_created_at,
              o.total_amount::numeric(12,2) AS total_amount,
              o.delivery_cost::numeric(12,2) AS delivery_cost,
-             o.platform_commission::numeric(12,2) AS platform_commission,
              u.user_id AS customer_id, u.name AS customer_name,
              u.email AS customer_email,
              COUNT(*) OVER() AS total_count
@@ -153,8 +151,6 @@ const LIST_OWNED_SALES = `
     SELECT oi.order_id, oi.prod_id, oi.quantity,
            oi.unit_price::numeric(12,2) AS unit_price,
            (oi.quantity * oi.unit_price)::numeric(12,2) AS subtotal,
-           oi.platform_commission::numeric(12,2) AS platform_commission,
-           (oi.quantity * oi.unit_price - oi.platform_commission)::numeric(12,2) AS net_to_shop,
            o.order_status, o.created_at,
            p.name AS listing_name,
            s.shop_id, s.name AS shop_name
@@ -184,10 +180,10 @@ const LIST_OWNED_REFUNDS = `
     ORDER BY vr.refund_id DESC
 `;
 
-// The running balance the admin path writes into. Separate from LIST_OWNED_SHOPS
+// The running balance the shop spends from. Separate from LIST_OWNED_SHOPS
 // because the payments page wants three numbers per shop, not a shop record.
-const LIST_OWNED_EARNINGS = `
-    SELECT shop_id, name, earnings::numeric(12,2) AS earnings, active_status
+const LIST_OWNED_BALANCES = `
+    SELECT shop_id, name, balance::numeric(12,2) AS balance, active_status
     FROM shops
     WHERE owner = $1
     ORDER BY shop_id
@@ -198,8 +194,12 @@ const LIST_OWNED_EARNINGS = `
 // happened to load would quietly disagree with itself as the window moved.
 //
 // Cancelled orders are excluded from every figure. A cancelled order returned its
-// stock, failed its payment and voided its commission, so counting it as a sale
-// would have a vendor's revenue include money nobody ever paid.
+// stock and failed its payment, so counting it as a sale would have a vendor's
+// revenue include money nobody ever paid.
+//
+// A sale is worth its line subtotal in full: there is no commission between the
+// customer's payment and the shop, and the delivery charge on the same order is
+// the courier's, not the shop's.
 const OWNED_TOTALS = `
     SELECT
       (SELECT COALESCE(SUM(sp.quantity * sp.wholesale_unit_price), 0)::numeric(12,2)
@@ -211,25 +211,19 @@ const OWNED_TOTALS = `
        JOIN products p ON p.prod_id = oi.prod_id
        JOIN shops s ON s.shop_id = p.shop_id
        WHERE s.owner = $1 AND o.order_status <> 'cancelled') AS gross_sales,
-      (SELECT COALESCE(SUM(oi.platform_commission), 0)::numeric(12,2)
-       FROM order_items oi
-       JOIN orders o ON o.order_id = oi.order_id
-       JOIN products p ON p.prod_id = oi.prod_id
-       JOIN shops s ON s.shop_id = p.shop_id
-       WHERE s.owner = $1 AND o.order_status <> 'cancelled') AS commission_paid,
       (SELECT COALESCE(SUM(vr.amount), 0)::numeric(12,2)
        FROM vendor_refunds vr JOIN shops s ON s.shop_id = vr.shop_id
        WHERE s.owner = $1) AS refunds_received,
-      (SELECT COALESCE(SUM(s.earnings), 0)::numeric(12,2)
-       FROM shops s WHERE s.owner = $1) AS earnings_balance
+      (SELECT COALESCE(SUM(s.balance), 0)::numeric(12,2)
+       FROM shops s WHERE s.owner = $1) AS balance_total
 `;
 
 // =========================================================
 // Customer
 // =========================================================
 
-// A customer's own payments. No platform_commission and no vendor's share: what
-// they paid, how, and whether it has settled.
+// A customer's own payments. What they paid, how, and whether it has settled —
+// the two halves being the shops' goods and the courier's trip.
 const LIST_OWNED_PAYMENTS = `
     SELECT pay.transaction_id, pay.payment_method, pay.payment_status, pay.paid_at,
            pay.amount::numeric(12,2) AS amount,
@@ -243,7 +237,7 @@ const LIST_OWNED_PAYMENTS = `
 `;
 
 module.exports = {
-  LIST_OWNED_EARNINGS,
+  LIST_OWNED_BALANCES,
   LIST_OWNED_PAYMENTS,
   LIST_OWNED_REFUNDS,
   LIST_OWNED_SALES,

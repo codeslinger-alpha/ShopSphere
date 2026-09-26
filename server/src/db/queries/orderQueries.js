@@ -1,7 +1,7 @@
-// Applied only to new orders; historical commissions remain stored on each line.
-const PLATFORM_COMMISSION_RATE = 0.05;
-
-// Flat delivery pay plus a share of the order total.
+// The courier's pay, and therefore the delivery charge the customer pays: the
+// two are the same number now. A flat part makes a short delivery worth doing,
+// the share makes a large one worth doing carefully. Applied at placement and
+// stored on the order, so changing these changes future orders only.
 const COURIER_BASE_FEE = 3;
 const COURIER_RATE = 0.02;
 
@@ -67,26 +67,25 @@ const CREATE_ORDER = `
 `;
 
 // Freeze the price read during checkout, not the price from an earlier cart page.
-// Cast quantity to its column type first, then numeric for decimal commission.
 const CREATE_ORDER_ITEM = `
-    INSERT INTO order_items (order_id, prod_id, quantity, unit_price, platform_commission)
-    VALUES ($1, $2, $3, $4, ROUND($3::int::numeric * $4::numeric * $5::numeric, 2))
+    INSERT INTO order_items (order_id, prod_id, quantity, unit_price)
+    VALUES ($1, $2, $3, $4)
 `;
 
-// Sum rounded line commissions so the order agrees with its own items.
-const RECORD_PLATFORM_COMMISSION = `
-    UPDATE orders o
-    SET platform_commission = (
-      SELECT COALESCE(SUM(oi.platform_commission), 0)
-      FROM order_items oi WHERE oi.order_id = o.order_id
-    )
-    WHERE o.order_id = $1
-    RETURNING platform_commission
+// Prices the trip and stores it on the order, which is what makes the courier's
+// pay and the customer's delivery charge one number. This runs after the items
+// because it is a share of total_amount, and total_amount is still 0 until
+// trg_order_items_recalc_total has fired.
+const RECORD_DELIVERY_COST = `
+    UPDATE orders
+    SET delivery_cost = ROUND($2::numeric + $3::numeric * total_amount, 2)
+    WHERE order_id = $1
+    RETURNING delivery_cost
 `;
 
 // The trigger has run by now, so this is the authoritative total.
 const ORDER_TOTALS = `
-    SELECT total_amount, delivery_cost FROM orders WHERE order_id = $1
+    SELECT fn_order_subtotal(order_id) AS total_amount, delivery_cost FROM orders WHERE order_id = $1
 `;
 
 // paid_at is set explicitly to NULL. The column defaults to CURRENT_TIMESTAMP,
@@ -198,31 +197,14 @@ const LIST_DELIVERIES_FOR_COURIER = `
     ORDER BY o.created_at, o.order_id
 `;
 
-// Compare-and-set prevents duplicate settlement. Cast the reused status parameter
-// explicitly so PostgreSQL infers the same type in SET and CASE.
-const ADVANCE_ORDER_STATUS = `
-    UPDATE orders
-    SET order_status = $3::varchar,
-        delivered_at = CASE WHEN $3::varchar = 'delivered'::varchar
-                            THEN CURRENT_TIMESTAMP
-                            ELSE delivered_at END
-    WHERE order_id = $1 AND delivery_person_id = $2 AND order_status = $4
+// Shipping is a single guarded write; delivery uses the multi-table procedure.
+const SHIP_ORDER = `
+    UPDATE orders SET order_status = 'shipped'
+    WHERE order_id = $1 AND delivery_person_id = $2 AND order_status = 'pending'
     RETURNING order_id, order_status, delivered_at, total_amount, delivery_person_id
 `;
 
-const COMPLETE_PAYMENT = `
-    UPDATE payments SET payment_status = 'completed', paid_at = $2
-    WHERE order_id = $1 AND payment_status = 'pending'
-    RETURNING transaction_id, payment_status, paid_at
-`;
-
-// Run only after the delivered transition succeeds, in the same transaction.
-const CREDIT_COURIER_EARNINGS = `
-    UPDATE delivery_personnel
-    SET earnings = COALESCE(earnings, 0) + ROUND($2::numeric + $3::numeric * $4::numeric, 2)
-    WHERE delivery_person_id = $1
-    RETURNING delivery_person_id, earnings
-`;
+const SETTLE_DELIVERY = "CALL settle_delivery($1, $2, NULL)";
 
 // One round trip for every parcel on the run, rather than one per order.
 const GET_ITEMS_FOR_ORDERS = `
@@ -235,7 +217,7 @@ const GET_ITEMS_FOR_ORDERS = `
     ORDER BY s.name, p.name
 `;
 
-// Read only after ADVANCE_ORDER_STATUS matches nothing, to tell "not yours" apart
+// Read only after SHIP_ORDER matches nothing, to tell "not yours" apart
 // from "already moved on".
 const GET_ASSIGNED_ORDER = `
     SELECT order_id, order_status FROM orders
@@ -243,18 +225,17 @@ const GET_ASSIGNED_ORDER = `
 `;
 
 module.exports = {
-  ADVANCE_ORDER_STATUS,
+  SHIP_ORDER,
   CANCEL_ORDER,
   CART_FOR_ORDER,
   CLAIM_FAILURE_DETAIL,
   CLAIM_STOCK,
   CLEAR_CART,
-  COMPLETE_PAYMENT,
+  SETTLE_DELIVERY,
   COURIER_BASE_FEE,
   COURIER_RATE,
   CREATE_ORDER,
   CREATE_ORDER_ITEM,
-  CREDIT_COURIER_EARNINGS,
   CREATE_PAYMENT,
   FIND_AVAILABLE_COURIER,
   GET_ASSIGNED_ORDER,
@@ -265,7 +246,6 @@ module.exports = {
   LIST_DELIVERIES_FOR_COURIER,
   LIST_ORDERS_BY_USER,
   ORDER_TOTALS,
-  PLATFORM_COMMISSION_RATE,
-  RECORD_PLATFORM_COMMISSION,
+  RECORD_DELIVERY_COST,
   USER_PROFILE_ADDRESS,
 };

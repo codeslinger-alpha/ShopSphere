@@ -128,10 +128,10 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
           prodId,
         ])
       ).rows[0].discontinued;
-    const earningsOf = async (id) =>
+    const balanceOf = async (id) =>
       Number(
-        (await client.query("SELECT earnings FROM shops WHERE shop_id = $1", [id]))
-          .rows[0].earnings ?? 0,
+        (await client.query("SELECT balance FROM shops WHERE shop_id = $1", [id]))
+          .rows[0].balance ?? 0,
       );
     const refundsOf = async (prodId) =>
       (
@@ -196,7 +196,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         assert.equal(attributed.fallback_units, 0);
         assert.equal(Number(attributed.purchased_amount), 53);
 
-        const before = await earningsOf(techCorner);
+        const before = await balanceOf(techCorner);
         const removed = await removeListing(listing);
 
         assert.equal(removed.status, 200, removed.data.message);
@@ -208,7 +208,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         assert.equal(removed.data.refund.removed_by, admin.user_id);
         assert.match(removed.data.message, /\$53\.00/);
 
-        assert.equal(await earningsOf(techCorner), before + 53);
+        assert.equal(await balanceOf(techCorner), before + 53);
         assert.equal(await discontinuedOf(listing), true);
         // Paid for, so it stops being inventory.
         assert.equal(await stockOf(listing), 0);
@@ -233,12 +233,12 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         assert.equal(Number(attributed.fallback_unit_amount), 40);
         assert.equal(Number(attributed.amount), 160);
 
-        const before = await earningsOf(techCorner);
+        const before = await balanceOf(techCorner);
         const removed = await removeListing(listing);
         assert.equal(removed.status, 200, removed.data.message);
         assert.equal(Number(removed.data.refund.amount), 160);
         assert.equal(removed.data.refund.units, 4);
-        assert.equal(await earningsOf(techCorner), before + 160);
+        assert.equal(await balanceOf(techCorner), before + 160);
       },
     );
 
@@ -250,13 +250,13 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         await addPurchase(techCorner, keyboardMaster, 6, 8, "2026-01-01T00:00:00Z");
         await setStock(listing, 4);
 
-        const before = await earningsOf(techCorner);
+        const before = await balanceOf(techCorner);
         assert.equal(
           Number((await removeListing(listing)).data.refund.amount),
           32,
           "4 units at the only, newest price",
         );
-        assert.equal(await earningsOf(techCorner), before + 32);
+        assert.equal(await balanceOf(techCorner), before + 32);
 
         // The vendor buys again. RESTOCK_LISTING adds to in_stock and clears the
         // discontinued flag, so without zeroing the paid-out stock this would
@@ -275,7 +275,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
 
         // 32 + 48 is 10 units at 8.00: exactly what the vendor paid for the 10
         // units refunded across the two removals, and no more.
-        assert.equal(await earningsOf(techCorner), before + 32 + 48);
+        assert.equal(await balanceOf(techCorner), before + 32 + 48);
         assert.equal((await refundsOf(listing)).length, 2);
       },
     );
@@ -286,7 +286,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         // The seeded lamp at Gadget House is deliberately out of stock.
         const listing = await listingId("Demo Gadget House", "Demo Desk Lamp");
         await setStock(listing, 0);
-        const before = await earningsOf(gadgetHouse);
+        const before = await balanceOf(gadgetHouse);
 
         const removed = await removeListing(listing);
         assert.equal(removed.status, 200, removed.data.message);
@@ -296,7 +296,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         assert.equal(removed.data.refund.unit_amount, null);
         assert.match(removed.data.message, /nothing to refund/);
 
-        assert.equal(await earningsOf(gadgetHouse), before);
+        assert.equal(await balanceOf(gadgetHouse), before);
         assert.equal(await discontinuedOf(listing), true);
         assert.equal((await refundsOf(listing)).length, 1);
       },
@@ -307,20 +307,20 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
       async () => {
         const listing = await listingId("Demo Tech Corner", "Demo Fitness Watch");
         await setStock(listing, 3);
-        const before = await earningsOf(techCorner);
+        const before = await balanceOf(techCorner);
 
         const first = await removeListing(listing);
         assert.equal(first.status, 200, first.data.message);
         const paid = Number(first.data.refund.amount);
         assert.ok(paid > 0, "the first removal should have paid something");
-        assert.equal(await earningsOf(techCorner), before + paid);
+        assert.equal(await balanceOf(techCorner), before + paid);
 
         const second = await removeListing(listing);
         assert.equal(second.status, 409, second.data.message);
         assert.match(second.data.message, /already been removed/);
         // The money is the assertion that matters: a 409 that still credited
         // would look identical from the status code alone.
-        assert.equal(await earningsOf(techCorner), before + paid);
+        assert.equal(await balanceOf(techCorner), before + paid);
         assert.equal((await refundsOf(listing)).length, 1);
       },
     );
@@ -337,8 +337,8 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         const gadget = await listingId("Demo Gadget House", "Demo Wireless Keyboard");
         await setStock(tech, 20);
         await setStock(gadget, 18);
-        const techBefore = await earningsOf(techCorner);
-        const gadgetBefore = await earningsOf(gadgetHouse);
+        const techBefore = await balanceOf(techCorner);
+        const gadgetBefore = await balanceOf(gadgetHouse);
 
         const removed = await removeMaster(keyboardMaster);
         assert.equal(removed.status, 200, removed.data.message);
@@ -349,8 +349,8 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         assert.match(removed.data.message, /\$950\.00/);
         assert.match(removed.data.message, /2 listings/);
 
-        assert.equal(await earningsOf(techCorner), techBefore + 500);
-        assert.equal(await earningsOf(gadgetHouse), gadgetBefore + 450);
+        assert.equal(await balanceOf(techCorner), techBefore + 500);
+        assert.equal(await balanceOf(gadgetHouse), gadgetBefore + 450);
         assert.equal(await stockOf(tech), 0);
         assert.equal(await stockOf(gadget), 0);
         assert.equal(await discontinuedOf(tech), true);
@@ -365,12 +365,12 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
 
         // Idempotent by construction: there is no stock left to attribute, so a
         // second removal pays nothing rather than paying again.
-        const techAfter = await earningsOf(techCorner);
+        const techAfter = await balanceOf(techCorner);
         const again = await removeMaster(keyboardMaster);
         assert.equal(again.status, 200, again.data.message);
         assert.equal(again.data.refunds.length, 0);
         assert.match(again.data.message, /nothing to refund/);
-        assert.equal(await earningsOf(techCorner), techAfter);
+        assert.equal(await balanceOf(techCorner), techAfter);
       },
     );
 
@@ -386,7 +386,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         await client.query("UPDATE products SET discontinued = true WHERE prod_id = $1", [
           listing,
         ]);
-        const before = await earningsOf(techCorner);
+        const before = await balanceOf(techCorner);
 
         const removed = await removeMaster(lampMaster);
         assert.equal(removed.status, 200, removed.data.message);
@@ -395,13 +395,13 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         // Demo Desk Lamp wholesales at 12.00.
         assert.equal(refund.units, 15);
         assert.equal(Number(refund.amount), 180);
-        assert.equal(await earningsOf(techCorner), before + 180);
+        assert.equal(await balanceOf(techCorner), before + 180);
       },
     );
 
     await check("removal is closed to everyone but an administrator", async () => {
       const listing = await listingId("Demo Tech Corner", "Demo Wireless Keyboard");
-      const before = await earningsOf(techCorner);
+      const before = await balanceOf(techCorner);
 
       const asVendor = await removeListing(listing, vendor);
       assert.equal(asVendor.status, 403, asVendor.data.message);
@@ -411,7 +411,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
       assert.equal(asGuest.status, 401, asGuest.data.message);
 
       assert.equal(await removeMaster(keyboardMaster, vendor).then((r) => r.status), 403);
-      assert.equal(await earningsOf(techCorner), before);
+      assert.equal(await balanceOf(techCorner), before);
       assert.equal(await discontinuedOf(listing), false);
       assert.equal((await refundsOf(listing)).length, 0);
     });

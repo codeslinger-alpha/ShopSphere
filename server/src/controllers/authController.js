@@ -185,7 +185,7 @@ async function login(req, res) {
 }
 
 async function logout(req, res) {
-  await pool.query(INCREMENT_TOKEN_VERSION, [req.user.user_id]);
+  await transaction.query(INCREMENT_TOKEN_VERSION, [req.user.user_id]);
   clearAuthCookie(res);
   return res.status(204).send();
 }

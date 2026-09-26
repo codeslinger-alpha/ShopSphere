@@ -67,7 +67,6 @@ const payment = (overrides) => ({
     delivery_cost: "8.00",
     payment_method: "cash_on_delivery",
     payment_status: "completed",
-    platform_commission: "6.00",
     paid_at: "2026-09-03T15:00:00.000Z",
     ...overrides,
 });
@@ -391,12 +390,12 @@ test("the payments tab shows the platform's cut beside the customer's bill", asy
 
     const table = page.locator("table");
     await expect(table).toContainText("customer@example.test");
-    // What the customer owes and what the platform kept are different numbers,
-    // and the row has to show both or the screen is misleading.
+    // The order total and the trip are different numbers, and the row has to show
+    // both or the screen is misleading: their sum is what the customer pays.
     await expect(table).toContainText("$128.00");
     await expect(table).toContainText("$120.00 + $8.00 delivery");
-    await expect(table).toContainText("$6.00");
     await expect(table).toContainText("Cash on delivery");
+    await expect(table).not.toContainText("Commission");
 
     await expect.poll(() => queries.at(-1)).toContain("limit=20");
     await page.getByLabel("Method").selectOption("prepaid");

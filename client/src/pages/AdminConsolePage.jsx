@@ -555,7 +555,6 @@ function PaymentsPanel({ data, isLoading, error, filters, onFilter, onPage }) {
                 <th>Amount</th>
                 <th>Method</th>
                 <th>Payment</th>
-                <th>Commission</th>
                 <th>Paid</th>
               </tr>
             </thead>
@@ -586,7 +585,6 @@ function PaymentsPanel({ data, isLoading, error, filters, onFilter, onPage }) {
                   <td>
                     <StatusPill status={payment.payment_status} />
                   </td>
-                  <td>${payment.platform_commission}</td>
                   <td>
                     {payment.paid_at
                       ? new Date(payment.paid_at).toLocaleString()
@@ -821,7 +819,7 @@ export default function AdminConsolePage() {
   const setShopStatus = (shop, body) =>
     write(`/admin/shops/${shop.shop_id}/status`, "PUT", body);
   // Goes through the page's write so the refund message lands in the console's
-  // feedback area and the shop list reloads with its new counts and earnings.
+  // feedback area and the shop list reloads with its new counts and balance.
   const removeListing = (prodId) =>
     write(`/admin/listings/${prodId}/discontinue`, "PUT");
 

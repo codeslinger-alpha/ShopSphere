@@ -6,9 +6,9 @@ import { Feedback } from "../components/FormFields";
 // on each order.
 //
 // Deliberately narrow: the amount, how it was paid, whether it has settled, and a
-// way back to the order it settles. The platform's commission and the vendor's
-// share are not the customer's business and the server does not send them, so
-// there is nothing here to leave out.
+// way back to the order it settles. The whole of the customer's money is the
+// goods plus the trip, and both are on the row — there is no third party in
+// between for the server to withhold.
 export default function AccountPaymentsPage() {
   const payments = useResource("/account/payments");
   const items = payments.data ?? [];

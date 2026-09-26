@@ -1,3 +1,4 @@
+const transaction = require("../db/transaction");
 const pool = require("../db/pool");
 const {
   ADD_WISHLIST_ITEM,
@@ -26,7 +27,7 @@ async function addWishlistItem(req, res) {
       .json({ message: "Product ID must be a positive integer." });
   }
 
-  const result = await pool.query(ADD_WISHLIST_ITEM, [
+  const result = await transaction.query(ADD_WISHLIST_ITEM, [
     req.user.user_id,
     productId,
   ]);
@@ -68,7 +69,7 @@ async function removeWishlistItem(req, res) {
       .json({ message: "Product ID must be a positive integer." });
   }
 
-  const result = await pool.query(DELETE_WISHLIST_ITEM, [
+  const result = await transaction.query(DELETE_WISHLIST_ITEM, [
     req.user.user_id,
     productId,
   ]);

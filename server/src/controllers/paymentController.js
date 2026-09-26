@@ -34,33 +34,19 @@ async function listRefunds(req, res) {
 // Vendor — their own books
 // =========================================================
 
-// Four lists and a set of totals, all keyed on the caller's own user id. Shop ids
-// never enter into it: a vendor cannot ask for another shop's takings because
-// there is no parameter in which to ask, which is a stronger guarantee than
-// checking one.
+// A sale is worth its line subtotal in full. There is no commission between the
+// customer's payment and the shop, so gross_sales is also what the shop nets and
+// there is no second figure to derive.
 async function vendorPayments(req, res) {
   const owner = req.user.user_id;
 
   const sales = (await pool.query(q.LIST_OWNED_SALES, [owner])).rows;
   const purchases = (await pool.query(vendor.LIST_OWNED_PURCHASES, [owner])).rows;
   const refunds = (await pool.query(q.LIST_OWNED_REFUNDS, [owner])).rows;
-  const shops = (await pool.query(q.LIST_OWNED_EARNINGS, [owner])).rows;
+  const shops = (await pool.query(q.LIST_OWNED_BALANCES, [owner])).rows;
   const totals = (await pool.query(q.OWNED_TOTALS, [owner])).rows[0];
 
-  // The commission and the post-commission net are derived from what the totals
-  // query already returned rather than re-read, so the headline figures and the
-  // rows on the screen cannot disagree.
-  const { gross_sales, commission_paid } = totals;
-  return res.json({
-    sales,
-    purchases,
-    refunds,
-    shops,
-    totals: {
-      ...totals,
-      net_sales: (Number(gross_sales) - Number(commission_paid)).toFixed(2),
-    },
-  });
+  return res.json({ sales, purchases, refunds, shops, totals });
 }
 
 // =========================================================

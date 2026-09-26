@@ -4,12 +4,6 @@ const v = require("../utils/input");
 const q = require("../db/queries/orderQueries");
 const { CREATE_LOCATION } = require("../db/queries/authQueries");
 
-// Only these two moves exist for a courier, and each one is only legal from the
-// status before it. fn_guard_order_transition enforces the same table in the
-// database; stating it here too is what lets the endpoint answer 400 to a typo
-// rather than letting a constraint violation surface.
-const COURIER_TRANSITIONS = { shipped: "pending", delivered: "shipped" };
-
 // Said to the customer whose checkout lost the race. The distinction matters: a
 // sold-out listing can be fixed by lowering the quantity, one that went off sale
 // cannot.
@@ -86,12 +80,16 @@ async function placeOrder(req, res) {
         item.prod_id,
         item.quantity,
         item.unit_price,
-        q.PLATFORM_COMMISSION_RATE,
       ]);
     }
 
-    // Aggregate the rounded commissions stored on each line.
-    await client.query(q.RECORD_PLATFORM_COMMISSION, [created.order_id]);
+    // Prices the trip from the goods total the trigger has just written, so the
+    // customer's delivery charge and the courier's pay are the same number.
+    await client.query(q.RECORD_DELIVERY_COST, [
+      created.order_id,
+      q.COURIER_BASE_FEE,
+      q.COURIER_RATE,
+    ]);
 
     // Read back rather than summed here: trg_order_items_recalc_total has just
     // written total_amount, and the database is the authority on it.
@@ -143,7 +141,7 @@ async function getOrder(req, res) {
 async function cancelOrder(req, res) {
   const orderId = v.id(req.params.orderId, "Order");
   const cancelled = (
-    await pool.query(q.CANCEL_ORDER, [orderId, req.user.user_id])
+    await transaction.query(q.CANCEL_ORDER, [orderId, req.user.user_id])
   ).rows[0];
 
   if (!cancelled) {
@@ -192,20 +190,14 @@ async function listDeliveries(req, res) {
 async function advanceDelivery(req, res) {
   const orderId = v.id(req.params.orderId, "Order");
   const target = req.body?.order_status;
-  const expected = Object.hasOwn(COURIER_TRANSITIONS, target)
-    ? COURIER_TRANSITIONS[target] : null;
-  if (!expected)
+  if (!["shipped", "delivered"].includes(target))
     v.fail(400, "An order can be marked shipped or delivered.");
 
   const order = await transaction(async (client) => {
-    const advanced = (
-      await client.query(q.ADVANCE_ORDER_STATUS, [
-        orderId,
-        req.user.user_id,
-        target,
-        expected,
-      ])
-    ).rows[0];
+    const advanced = target === "delivered"
+      ? (await client.query(q.SETTLE_DELIVERY, [orderId, req.user.user_id]))
+          .rows[0].result
+      : (await client.query(q.SHIP_ORDER, [orderId, req.user.user_id])).rows[0];
 
     if (!advanced) {
       const assigned = (
@@ -219,32 +211,7 @@ async function advanceDelivery(req, res) {
       );
     }
 
-    // Cash on delivery settles at the door: the order being delivered is the
-    // moment the money exists, so the payment is completed with the same
-    // timestamp the order was delivered at.
-    let payment = null;
-    let courierEarnings = null;
-    if (target === "delivered") {
-      payment =
-        (
-          await client.query(q.COMPLETE_PAYMENT, [
-            orderId,
-            advanced.delivered_at,
-          ])
-        ).rows[0] || null;
-
-      // The successful status transition makes this credit exactly once.
-      courierEarnings = (
-        await client.query(q.CREDIT_COURIER_EARNINGS, [
-          advanced.delivery_person_id,
-          q.COURIER_BASE_FEE,
-          q.COURIER_RATE,
-          advanced.total_amount,
-        ])
-      ).rows[0];
-    }
-
-    return { ...advanced, payment, courier_earnings: courierEarnings };
+    return { payment: null, courier_earnings: null, ...advanced };
   });
 
   if (!order)

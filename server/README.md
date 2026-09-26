@@ -7,9 +7,8 @@ transactions and authentication middleware. Express serves `/api/...` only.
 
 Run commands from the repository root: `npm install`, `npm run dev:server`.
 Configure `server/.env` from `.env.example`. Use `npm run db:init` for a new empty
-database, or `npm run db:migrate` for an existing ShopSphere database, followed
-by `npm run db:seed` for local demo data. Never rerun the fresh schema over existing
-tables. Migrations preserve data and the demo seed skips existing matching rows.
+database, followed by `npm run db:seed` for local demo data. Init refuses existing
+tables. The demo seed preserves matching accounts, inventory and earnings.
 
 [Backend file, API and database guide](../docs/BACKEND.md)
 
@@ -23,3 +22,5 @@ their generated schemas. Tests cover cart regressions, all-role authentication,
 ownership, admin catalog transactions, vendor purchases, checkout concurrency,
 delivery, direct SQL review enforcement and logout. Backend logs appear in the
 server terminal; browser Network shows public JSON responses.
+
+[Checklist review](../docs/CHECKLIST.md) · [Expanded dataset and accounts](../docs/DEMO_DATA.md)

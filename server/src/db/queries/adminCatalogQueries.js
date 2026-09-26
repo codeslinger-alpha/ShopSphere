@@ -243,13 +243,14 @@ const REMOVE_MASTER_LISTINGS = `
   WHERE master_prod_id = $1
 `;
 
-// shops.earnings is nullable despite the DEFAULT 0, so COALESCE rather than
-// assuming a number is there.
-const CREDIT_SHOP_EARNINGS = `
+// The refund a removal owes the shop lands in the same balance the shop spends
+// from, which is what makes a removal and a wholesale purchase two movements of
+// one number rather than two unrelated readings.
+const CREDIT_SHOP_BALANCE = `
   UPDATE shops
-  SET earnings = COALESCE(earnings, 0) + $2
+  SET balance = balance + $2
   WHERE shop_id = $1
-  RETURNING shop_id, earnings
+  RETURNING shop_id, balance
 `;
 
 const CREATE_VENDOR_REFUND = `
@@ -289,7 +290,7 @@ module.exports = {
   CREATE_MASTER,
   CREATE_MASTER_VALUE,
   CREATE_VENDOR_REFUND,
-  CREDIT_SHOP_EARNINGS,
+  CREDIT_SHOP_BALANCE,
   DELETE_CATEGORY,
   DELETE_CATEGORY_ATTRIBUTES,
   DELETE_MASTER_VALUES,

@@ -16,8 +16,104 @@ const NEXT_STEP = {
   shipped: { label: "Mark delivered", status: "delivered" },
 };
 
+// The pickups waiting for a courier: approved returns nobody has collected yet.
+//
+// This is not restricted to the courier who delivered the order. Whoever is free
+// can take it, and the list says who delivered it so a courier can tell at a
+// glance whether it is one they already know the address for. A pickup only one
+// person can perform is a pickup that can stall forever — which is why the
+// server allows any active courier to take one.
+function ReturnPickups({ pickups, onCollected }) {
+  const task = useTask();
+
+  async function collect(item) {
+    const ok = await task.run(() =>
+      api(`/delivery/returns/${item.return_id}/collect`, { method: "PUT" }),
+    );
+    // A collected return leaves the list, so it is re-read rather than patched.
+    if (ok) onCollected();
+  }
+
+  return (
+    <>
+      <h2>Returns to collect</h2>
+      <Feedback error={task.error} message={task.message} />
+      {pickups.isLoading ? (
+        <p role="status">Loading pickups...</p>
+      ) : pickups.data?.length === 0 ? (
+        <div className="empty-state">
+          No parcels are waiting to be picked up. A return appears here once the
+          shop has accepted it.
+        </div>
+      ) : (
+        <div className="order-list">
+          {pickups.data.map((item) => (
+            <article className="order-card" key={item.return_id}>
+              <div className="order-card-head">
+                <div>
+                  <h3>
+                    {item.listing_name}{" "}
+                    <span className="muted">× {item.quantity}</span>
+                  </h3>
+                  <p className="muted">
+                    Return #{item.return_id} · from order #{item.order_id}
+                  </p>
+                </div>
+                <span className={`status-pill status-${item.status}`}>
+                  {item.status}
+                </span>
+              </div>
+
+              <dl className="order-facts">
+                <div>
+                  <dt>Collect from</dt>
+                  <dd>
+                    {item.customer_name}
+                    {item.customer_phone ? ` · ${item.customer_phone}` : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Address</dt>
+                  <dd>
+                    {[
+                      item.street_address,
+                      item.city,
+                      item.state_province,
+                      item.postal_code,
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Take it back to</dt>
+                  <dd>{item.shop_name}</dd>
+                </div>
+              </dl>
+
+              <p className="muted">
+                The customer has already been refunded. Collect the parcel and
+                hand it to the shop; nothing is paid at the door.
+              </p>
+
+              <button
+                className="primary"
+                disabled={task.busy}
+                onClick={() => collect(item)}
+              >
+                Mark collected
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function DeliveriesPage() {
   const deliveries = useResource("/delivery/deliveries");
+  const pickups = useResource("/delivery/returns");
   const task = useTask();
   // Which order the in-flight request belongs to, so only that card's button
   // shows it is working.
@@ -132,6 +228,8 @@ export default function DeliveriesPage() {
           })}
         </div>
       )}
+
+      <ReturnPickups pickups={pickups} onCollected={pickups.reload} />
     </main>
   );
 }

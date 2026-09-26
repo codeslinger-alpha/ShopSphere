@@ -15,7 +15,7 @@ async function initialize() {
     );
     if (existing.rowCount)
       throw new Error(
-        "Schema is not empty. Use npm run db:migrate for an existing database.",
+        "Schema is not empty. Configure a new empty database/schema before running db:init. Existing data was not changed.",
       );
     await client.query(
       await fs.readFile(path.join(__dirname, "../sql/schema.sql"), "utf8"),

@@ -29,10 +29,10 @@ marks the order delivered.
 | When stock is claimed | At checkout, never while in the cart | A cart is a wish, not a hold. Holding stock for carts would need expiry and would let one abandoned tab block a sale. |
 | Order spans shops | Yes, one order can contain lines from several shops | The seed already establishes this shape and `orders` has a single `shipping_address`. Per-shop sub-orders would change both the order and the delivery model. |
 | Courier assignment | Automatic at checkout, by fewest open orders | Removes a dispatch step nobody was going to build. `delivery_person_id` stays `NULL` when nobody is available — the schema allows it and the seed's second order is already in that state. |
-| Refunds | None on the customer side; vendor refunds exist | A cancelled order fails its pending cash-on-delivery payment — no customer money had moved. Separately, an admin withdrawing a listing pays the vendor for the stock they still hold: `vendor_refunds`, described in [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md). That compensates a shop for unsold inventory, not a buyer for an order, and the two never share a table. |
-| Delivery fee | Flat, defaulting to `0` | `orders.delivery_cost` stays a column rather than a per-distance calculation. It is what the customer pays for the trip, not what the courier is paid — see the courier rule below. |
-| Platform commission | 5% per line at placement, stored | Named constants in `orderQueries.js`, not inline numbers. Written per `order_items` line and summed onto the order, so gross value and platform revenue are never the same column. |
-| Courier pay | Base fee plus a share of the goods total, on delivery | Credited in the same statement that completes the payment, so the compare-and-set that makes delivery happen once is what makes the courier paid once. |
+| Refunds | Vendor-approved returns, paid at approval | A cancelled order fails its pending cash-on-delivery payment — no customer money had moved. Once an order has been delivered, a customer may ask to return a line: the vendor accepts or declines, and acceptance refunds the customer. Separately, an admin withdrawing a listing pays the vendor for stock they still hold: `vendor_refunds`. That compensates a shop for unsold inventory, the return compensates a buyer for goods, and the two never share a table — see [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md). |
+| Delivery fee | Base fee plus a share of the goods total, priced at placement | `orders.delivery_cost` stays a column rather than a per-distance calculation, but it is now written at checkout rather than defaulting to `0`: it is **the same number as the courier's pay**, so the customer's payment covers goods plus trip exactly. |
+| Platform commission | None | Removed entirely. The customer's payment is the shops' goods plus the courier's fee, and nothing is withheld in between. A shop's cut of a sale is its line subtotal in full. |
+| Courier pay | The order's own `delivery_cost` | Read back from the row by `settle_delivery` rather than recomputed, so editing the rate constants re-prices future orders only. Credited by the same compare-and-set that moves the order to `delivered`, so a second tap cannot pay twice. |
 
 ## The concurrency problem
 
@@ -117,10 +117,10 @@ Inside one transaction, in this order:
 | 3 | `CREATE_LOCATION` or `USER_PROFILE_ADDRESS` | A supplied address becomes a new `locations` row; otherwise the profile's `users.address` is used. Neither → `400` naming the profile. |
 | 4 | `FIND_AVAILABLE_COURIER` | Fewest open orders first; `NULL` when nobody is available. |
 | 5 | `CREATE_ORDER` | `total_amount` is deliberately **not** written — the trigger owns it. |
-| 6 | `CREATE_ORDER_ITEM` per line | `unit_price` is read during checkout and then stored on the order item; an earlier cart-page price is not reserved. The line also records its own `platform_commission` — `ROUND(quantity × unit_price × rate, 2)`. |
-| 7 | `RECORD_PLATFORM_COMMISSION` | Copies the **sum of the lines** onto `orders.platform_commission`. Per line then summed, not the order total times the rate: the two disagree whenever a line does not divide evenly. `total_amount` is still `trg_order_items_recalc_total`'s alone. |
+| 6 | `CREATE_ORDER_ITEM` per line | `unit_price` is read during checkout and then stored on the order item; an earlier cart-page price is not reserved. |
+| 7 | `RECORD_DELIVERY_COST` | `ROUND(COURIER_BASE_FEE + COURIER_RATE × total_amount, 2)` written onto the order. It must run **after** the items, because it is a share of `total_amount` and that is still `0` until `trg_order_items_recalc_total` has fired. This is the step that used to record the platform commission. |
 | 8 | `ORDER_TOTALS` | Reads back `total_amount` after `trg_order_items_recalc_total` has written it. The database is the authority, not a sum in the controller. |
-| 9 | `CREATE_PAYMENT` | `amount = total_amount + delivery_cost`, `'cash_on_delivery'`, `'pending'`, `paid_at = NULL`. |
+| 9 | `CREATE_PAYMENT` | `amount = total_amount + delivery_cost`, `'cash_on_delivery'`, `'pending'`, `paid_at = NULL`. The two halves are the shops' goods and the courier's trip — the whole of the customer's money. |
 | 10 | `CLEAR_CART` | `DELETE` only the purchased product IDs for this user; preserve later additions. |
 
 ### Why `paid_at` is written explicitly as `NULL`
@@ -164,27 +164,27 @@ both:
 | `delivered` | `completed` | Handed over and paid; `paid_at` records when. |
 | `cancelled` | `failed` | Never happened. The payment is failed, not left pending, so it cannot later look like money owed. |
 
-Marking an order delivered advances the order, completes the payment and credits
-the courier, all in one transaction. `COMPLETE_PAYMENT` is itself conditional on
-the payment still being `pending`, so a second delivery cannot re-date a settled
-payment — and because the courier's earnings are credited by the same
-compare-and-set that moves the order, a courier tapping "delivered" twice gets a
-`409` from the statement that would have paid them, rather than being paid twice.
+Marking an order delivered advances the order, completes the payment, credits the
+courier and credits each shop for its own lines, all in one transaction inside the
+`settle_delivery` procedure. It completes only a payment with status `pending`, so
+a second delivery cannot re-date a settled payment — and because the courier's
+earnings are credited by the same compare-and-set that moves the order, a courier
+tapping "delivered" twice gets a `409` from the statement that would have paid
+them, rather than being paid twice.
 
-The courier is paid `COURIER_BASE_FEE + COURIER_RATE × total_amount` — a named
-constant each, in `orderQueries.js`. `delivery_cost` is deliberately not part of
-it: that is what the customer pays for the trip, not what the trip is paid. The
-flat part is what makes a short delivery worth doing, the share what makes a large
-one worth doing carefully.
+The courier is paid the order's own `delivery_cost`, read back from the row rather
+than recomputed, and each shop is credited the full subtotal of its lines. The
+sale credits the shop when it is **delivered**, not when it is placed: an order
+still in a van is not money the shop can spend on stock. `COURIER_BASE_FEE` and
+`COURIER_RATE` in `orderQueries.js` are named constants, and because the result is
+stored on the order, changing them re-prices future orders only.
 
 Cancelling is a compare-and-set — `order_status = 'pending'` is part of the
 `UPDATE` predicate rather than read first and checked after — so two cancels
-racing cannot both return the stock. The stock restore, the payment failure and
-the voiding of the order's platform commission are done by
-`fn_cleanup_cancelled_order`, which fires only on the transition that actually
-happens. Voiding the commission is migration 008: without it the admin payments
-screen would show a cancelled order beside a failed payment while still reporting
-a margin that never existed.
+racing cannot both return the stock. The stock restore, the courier unassignment
+and the payment failure are done by `fn_cleanup_cancelled_order`, which fires only
+on the transition that actually happens. There is no commission to void: the
+customer's money had not moved and nothing had been withheld from it.
 
 ## Endpoints
 
@@ -196,8 +196,12 @@ a margin that never existed.
 | `PUT` | `/api/orders/:orderId/cancel` | customer | `pending` only. `404` unknown, `409` already shipped or cancelled. |
 | `GET` | `/api/delivery/deliveries` | delivery | The courier's assigned `pending` and `shipped` orders, with their items and the customer's contact details. |
 | `PUT` | `/api/delivery/orders/:orderId/status` | delivery | `{"order_status":"shipped"\|"delivered"}`. `404` not assigned to this courier, `409` wrong current status. Delivering also completes the payment and credits the courier. |
-| `GET` | `/api/account/payments` | customer | The caller's own payment history, without the platform's commission in the response at all. |
-| `GET` | `/api/vendor/payments` | vendor | The caller's books across owned shops: sales (no buyer identity), purchases, refunds received and earnings. No shop ID is accepted. |
+| `GET` | `/api/account/payments` | customer | The caller's own payment history: goods and delivery charge as separate columns, and their sum as what was paid. |
+| `GET` | `/api/vendor/payments` | vendor | The caller's books across owned shops: sales (no buyer identity), purchases, refunds received and the shop balance. No shop ID is accepted. |
+| `GET` | `/api/vendor/balance`; `POST /api/vendor/topups` | vendor | One shop's balance and the movements behind it; and a recharge that credits it. A recharge records the money and says plainly that no card was charged. |
+| `POST` | `/api/returns`; `GET /api/returns` | customer | Ask to return a line of a delivered order; and the caller's own returns. The refund amount is computed from the order line, never supplied. |
+| `GET` | `/api/vendor/returns`; `PUT /api/vendor/returns/:returnId/{approve,reject,restock}` | vendor | The returns to decide on, and the three transitions. `approve` debits the shop and records the refund; `restock` returns the goods to stock. |
+| `GET` | `/api/delivery/returns`; `PUT /api/delivery/returns/:returnId/collect` | delivery | Approved returns awaiting pickup, and the transition that takes one off that list. |
 
 Customer identity always comes from the JWT, never from the request body, and the
 delivery queries are all keyed on `delivery_person_id = req.user.user_id`.
@@ -208,9 +212,11 @@ delivery queries are all keyed on `delivery_person_id = req.user.user_id`.
 | --- | --- | --- |
 | `/checkout` | `CheckoutPage` | Shows the cart as the order, offers "send to a different address", and posts the order. |
 | `/orders` | `OrdersPage` | The customer's order history with both statuses. |
-| `/orders/:orderId` | `OrderDetailPage` | Items, totals, address, courier, the payment record, Cancel while pending, and one shop-review form per shop that contributed a line. |
-| `/delivery/deliveries` | `DeliveriesPage` | The courier's run, with only the next legal action on each order. |
+| `/orders/:orderId` | `OrderDetailPage` | Items, totals, address, courier, the payment record, Cancel while pending, the returns panel, and one shop-review form per shop that contributed a line. |
+| `/delivery/deliveries` | `DeliveriesPage` | The courier's run, with only the next legal action on each order, and the return pickups waiting for a courier. |
 | `/account/payments` | `AccountPaymentsPage` | The customer's own payment history, with a link back to each order. |
+| `/vendor/balance` | `VendorBalancePage` | The shop balance, its movements and the recharge form. |
+| `/vendor/statistics` | `VendorStatisticsPage` | Income over time and by listing, and the reconciliation against the balance. |
 
 The cart page's "Proceed to checkout" link is disabled while any line is
 unavailable or exceeds stock. That is a convenience, not a guarantee — the server
@@ -255,12 +261,14 @@ Proven:
   `SUM(quantity × unit_price)` from the trigger rather than from the controller;
 - delivery completes the payment and sets `paid_at`; a delivery cannot skip
   `shipped`; a courier cannot touch an order that is not theirs;
-- delivering credits the courier `COURIER_BASE_FEE + COURIER_RATE × total_amount`
-  exactly once, and a second delivery attempt is refused rather than paid;
-- each line records its own `platform_commission` and the order carries the sum of
-  the lines, which is not the same as the rate applied to the order total;
-- cancelling returns the stock, fails the pending payment and voids the commission,
-  once;
+- delivering credits the courier the order's own `delivery_cost` exactly once, and
+  credits each shop the full subtotal of its lines, and a second delivery attempt
+  is refused rather than paid;
+- the customer's payment is the goods plus the trip, and the courier's earnings
+  equal the sum of the delivery charges on the orders they delivered — no
+  commission is taken anywhere in between;
+- cancelling returns the stock, unassigns the courier and fails the pending
+  payment, once;
 - checkout assigns an available courier and leaves the order unassigned when there
   is none;
 - the claim is a single statement whose predicate includes the stock test, and the
@@ -298,14 +306,17 @@ output stays readable.
 - **Prepaid payment.** A gateway would add a branch to `CREATE_PAYMENT` and a
   completion callback; nothing else in the flow assumes cash.
 - **Split orders per shop.** One order spans shops by design.
-- **Refunding a customer.** Cancel fails the pending payment; no customer money had
-  moved, so there is nothing to return. Vendor refunds are a different kind of
-  money and live in [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md).
-- **Delivery fee rules.** `delivery_cost` is a column, not a calculation.
+- **Refunding a customer directly.** A cancel fails the pending payment; no
+  customer money had moved. A customer is refunded through a **return**, which the
+  vendor has to accept first, and which lives in
+  [`REFUNDS_AND_READ_SURFACES.md`](REFUNDS_AND_READ_SURFACES.md) — as do vendor
+  refunds, which are a different kind of money again.
+- **Delivery fee rules.** `delivery_cost` is a column written from two constants at
+  placement, not a distance or weight calculation.
 - **Image upload.** Product imagery is external placeholder URLs resolved by
   `ProductMedia.jsx`. A listing with no image URL and no keyword match shows its
   category's illustration, which is a local file, so it survives being offline;
   the stages above that are remote and need network access.
-- **Retroactive commission.** Every order placed before migration 008 keeps
-  `platform_commission` at its default zero. The rate is applied at placement, so
-  changing the constant changes future orders only.
+- **Retroactive pay changes.** `COURIER_BASE_FEE` and `COURIER_RATE` are applied at
+  placement and the result is stored on the order, so changing a constant changes
+  future orders only — an order already placed pays what it was priced at.

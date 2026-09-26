@@ -7,7 +7,6 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node scripts/seed.js",
-    "migrate": "node scripts/migrate.js",
     "test:integration": "LOG_SQL=false LOG_REQUESTS=false node --test --test-concurrency=1 tests/*.test.js",
     "init": "node scripts/init.js"
   },

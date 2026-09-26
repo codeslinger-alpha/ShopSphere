@@ -1452,6 +1452,103 @@ dd {
   color: var(--danger);
 }
 
+/* A return's own vocabulary. `requested` and `collected` are amber because both
+   mean something is still owed to somebody — a decision, or the units going back
+   on the shelf — while `approved` and `restocked` are settled states. A refusal
+   is an ending, like a cancelled order. */
+.status-pill.status-requested,
+.status-pill.status-collected {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.status-pill.status-approved,
+.status-pill.status-restocked {
+  border-color: var(--brand-200);
+  background: var(--success-bg);
+  color: var(--brand-700);
+}
+
+.status-pill.status-rejected {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* Income chart ------------------------------------------------------------- */
+/* Nothing here names a colour. The bars use the same two tokens as the meanings
+   they carry elsewhere — brand for money in, danger for money back out — so the
+   palette can be retuned in index.css without touching the chart. */
+.panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chart-wrap {
+  overflow-x: auto;
+}
+
+.bar-chart {
+  display: block;
+  width: 100%;
+  min-width: 480px;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-axis {
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  fill: var(--ink-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-bar-revenue {
+  fill: var(--brand-solid);
+}
+
+.chart-bar-refund {
+  fill: var(--danger);
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink-2);
+  font-size: 0.85rem;
+}
+
+/* The swatches are the bars' own tokens, so a legend can never drift from the
+   series it explains. */
+.chart-key {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+}
+
+.chart-key-revenue {
+  background: var(--brand-solid);
+}
+
+.chart-key-refund {
+  background: var(--danger);
+}
+
 /* The two facts about an order, side by side. */
 .status-row {
   display: flex;

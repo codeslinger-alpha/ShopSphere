@@ -3,16 +3,17 @@
 PostgreSQL, Express, React and Node.js shopping application using raw SQL.
 
 Read the [backend guide](docs/BACKEND.md) for the file map, API routes, SQL,
-transactions, migrations and database rules.
+transactions, stored routines and database rules.
 The broader [website/API guide](docs/WEBSITE_FLOW.md) covers role workflows and
 field ownership.
-See [evaluation coverage](docs/IMPLEMENTATION_STEPS.md) and the
+See the [current checklist review](docs/CHECKLIST.md), [demo dataset](docs/DEMO_DATA.md), and the
 [schema reference and ERD](docs/SCHEMA.md).
 
 From this directory, install dependencies once with `npm install`.
 Configure `server/.env` from `server/.env.example` and create a PostgreSQL database.
-For a **new empty database**, run `npm run db:init`. For an **existing database**, run
-`npm run db:migrate`. Then `npm run db:seed` adds local demonstration accounts and
+For a **new empty database**, run `npm run db:init`. All definitions are in
+`server/sql/schema.sql`; there is no separate migration step. Init refuses to
+overwrite existing tables. Then `npm run db:seed` adds the expanded demo dataset and
 `npm run dev` starts the API on port 5000 and website on port 5173.
 
 `npm run build`, `npm run lint`, `npm test`, and `npm run test:e2e` run validation.

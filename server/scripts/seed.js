@@ -15,10 +15,10 @@ async function seed() {
     throw new Error("Demo data is only intended for a development database.");
   }
 
-  const sql = await fs.readFile(
-    path.join(__dirname, "../sql/test_insert/seed_demo.sql"),
-    "utf8",
-  );
+  const files = ["seed_demo.sql", "seed_extended.sql"];
+  const sql = (await Promise.all(files.map((file) =>
+    fs.readFile(path.join(__dirname, "../sql/test_insert", file), "utf8"),
+  ))).join("\n");
   const results = await transaction(async (client) => {
     await client.query("SET LOCAL statement_timeout = '30s'");
     // Serialize seed commands so concurrent runs cannot duplicate demo rows.
@@ -30,7 +30,7 @@ async function seed() {
     0,
   );
   console.log(
-    `Demo seed complete: ${inserted} rows inserted. Existing records were preserved.`,
+    `Demo seed complete: ${inserted} rows affected. Existing accounts and inventory were preserved.`,
   );
   console.log(
     "Open http://localhost:5173/products to view the shop listings.",

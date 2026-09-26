@@ -10,6 +10,8 @@ import HomePage from "./pages/HomePage";
 import ProductsPage from "./pages/ProductsPage";
 import RoleWorkspacePage from "./pages/RoleWorkspacePage";
 import VendorPage from "./pages/VendorPage";
+import VendorBalancePage from "./pages/VendorBalancePage";
+import VendorStatisticsPage from "./pages/VendorStatisticsPage";
 import ProfilePage from "./pages/ProfilePage";
 import AdminCatalogPage from "./pages/AdminCatalogPage";
 import AdminConsolePage from "./pages/AdminConsolePage";
@@ -178,6 +180,22 @@ export default function App() {
           element={
             <RequireRole roles={["vendor"]}>
               <VendorPage key="inventory" page="inventory" />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/vendor/balance"
+          element={
+            <RequireRole roles={["vendor"]}>
+              <VendorBalancePage key="balance" />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/vendor/statistics"
+          element={
+            <RequireRole roles={["vendor"]}>
+              <VendorStatisticsPage key="statistics" />
             </RequireRole>
           }
         />

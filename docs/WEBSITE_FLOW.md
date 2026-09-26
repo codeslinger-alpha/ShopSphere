@@ -9,17 +9,13 @@ All commands below run from the **repository root**.
 2. Copy `server/.env.example` to `server/.env` and fill in your local PostgreSQL
    connection and a random JWT secret. Do not commit `.env`.
 3. Create an empty PostgreSQL database using your database tool. Set `DB_NAME` to it.
-4. For a **new empty database**, run `npm run db:init`. It refuses to overwrite
-   existing tables. For an **existing ShopSphere database**, use `npm run db:migrate`
-   instead. The migrations are additive and rerunnable; the runner records applied
-   filenames in `schema_migrations` and applies pending changes in a transaction.
-   Because `db:init` loads `schema.sql` *without* recording migrations, a later
-   `db:migrate` on such a database re-runs them, so every migration is written to be
-   safe the second time (`IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`).
-5. Run `npm run db:seed` for local demo/reference data. This includes Bangladesh,
-   all four roles and individually salted demo account hashes. It preserves existing
-   matching records and refuses production mode. Rerunning can replenish missing
-   demo cart/wishlist rows; it does not reset existing passwords or inventory.
+4. Run `npm run db:init`. The single `server/sql/schema.sql` contains the complete
+   schema, constraints, functions, procedure and triggers. Init refuses non-empty
+   schemas; incremental migration files and commands have been retired.
+5. Run `npm run db:seed` for both the original and expanded demo data. See
+   [DEMO_DATA.md](DEMO_DATA.md) for counts and credentials. Existing passwords,
+   inventory and balances are preserved; missing demo cart/wishlist rows can be
+   replenished. The seed rejects production mode.
 6. Run `npm run dev`. Open **http://localhost:5173**. Express runs on port 5000.
    Use localhost consistently for cookie handling. `npm run dev:client` and
    `npm run dev:server` start each side separately.
@@ -161,14 +157,15 @@ cannot be added without a role check by accident.
   and **Reject**. Both are the same call: `PUT /api/admin/shops/:shopId/status` with
   `active_status` of `active` or `disabled`.
 - **Payments** — every payment joined to its order and customer, filterable by status and
-  method. Each row shows the customer's bill (`amount`), what it was made of
-  (`$120.00 + $8.00 delivery`) and the platform's `platform_commission` beside it, because
-  what the customer owes and what the platform kept are different numbers and a row with
-  only one of them is misleading. A payment that was never settled shows `—` rather than a
-  date.
+  method. Each row shows the customer's bill (`amount`) and what it was made of
+  (`$120.00 + $8.00 delivery`), because what the customer owes and how it splits between
+  the shops and the courier are different numbers and a row with only one of them is
+  misleading. A payment that was never settled shows `—` rather than a date.
 - **Refunds** — every `vendor_refunds` row with its shop, listing, units, unit price, total,
   reason and the administrator who decided to. The reason filter is a closed set
-  (`admin_removal`, `shop_closed`), not free text.
+  (`admin_removal`, `shop_closed`), not free text. These are the platform paying a shop
+  for withdrawn stock; the refunds a *shop* pays a *customer* are the returns flow below,
+  and they never share a table.
 
 Both financial tabs read `paymentController.js` → `paymentQueries.js` and are admin-only.
 They are the two surfaces a vendor's own books are a slice of. `GET /api/admin/permissions`
@@ -209,7 +206,7 @@ since a *different* active admin can only be disabled when at least two exist.
 
 A vendor creates one or more shops at **My shops** (`/vendor/shops`, `VendorPage.jsx`).
 The form covers name, phone, logo URL, cover photo URL, Markdown description and full
-address. IDs, owner, creation time, earnings and status are shown or supplied
+address. IDs, owner, creation time, balance and status are shown or supplied
 automatically. Ownership always comes from the session.
 
 **A new shop waits for approval.** It is created `active_status = 'pending'`, so it is
@@ -242,12 +239,42 @@ listings are preserved, not destructively merged. Listing edits allow retail pri
 seller description and discontinued status. Stock increases require a purchase.
 Purchase history displays ID, date, shop, master, quantity, unit cost and total.
 
-**Payments** (`/vendor/payments`) is the vendor's books: sales of their own listings with
-`net_to_shop` per line, their wholesale purchases, refunds they have received, their shops'
-`earnings`, and totals. It is scoped to owned shops from the session and accepts no shop
-ID, so there is no id to forge. The sales rows deliberately carry `order_id` and **not** the
-buyer's name or email: the courier delivering the parcel already has it, and the vendor is
-fulfilling against an order number rather than a person.
+**Payments** (`/vendor/payments`) is the vendor's books: sales of their own listings,
+their wholesale purchases, refunds they have received, their shops' balances, and
+totals. It is scoped to owned shops from the session and accepts no shop ID, so there
+is no id to forge. The sales rows deliberately carry `order_id` and **not** the
+buyer's name or email: the courier delivering the parcel already has it, and the vendor
+is fulfilling against an order number rather than a person. A sale is worth its line
+subtotal in full — there is no commission in between the customer's payment and the
+shop, and the delivery charge on the same order is the courier's, not the shop's. The
+"Sales" figure here counts every non-cancelled order, including ones still on their way.
+
+**The balance** (`/vendor/balance`, `VendorBalancePage.jsx`) is what the shop can spend
+on stock. It shows the number, a statement of the movements behind it — sales,
+purchases, recharges, administrative refunds and customer-return refunds, newest first,
+each in one list told apart by kind — and a recharge form. The form records the money
+and says so in as many words: *"No card was charged."* There is no payment gateway
+behind it and the page does not pretend otherwise. A balance is allowed to go negative,
+because a vendor must not be able to refuse a customer's refund by having spent the
+money, and the page shows it plainly rather than hiding it.
+
+**Income** (`/vendor/statistics`, `VendorStatisticsPage.jsx`) is the time series and
+leaderboard: revenue and refunds per day, week or month as a bar chart, the ten listings
+that earned the most with each one's share of revenue, an every-period table, and a
+reconciliation panel against the balance. Revenue here means **delivered** revenue only,
+because that is when `settle_delivery` credits the balance — the page says so, and says
+that the payments page's Sales figure counts orders still in transit. A return does not
+erase the sale that happened: the delivered series keeps the original line and refunds
+are charted beside it, so a good month and a bad one can be read at once instead of
+history changing under the vendor.
+
+**Returns** (`/vendor/returns`, rendered on the payments page) has three groups: the
+requests waiting for a decision, each with **Accept and refund $X** and **Decline**;
+the ones on their way back, whose **Restock** button is offered only once the courier
+has collected; and the history. Declining requires a typed reason — a vendor who wants
+to refuse has to say why. Accepting is what debits the balance and pays the customer;
+restocking is what puts the goods back on the shelf. Those are deliberately different
+moments: the money follows the obligation, the stock follows the parcel.
 
 Markdown is rendered by `react-markdown` without raw HTML execution. Images are
 HTTP/HTTPS URLs; binary uploads are not implemented. Wholesale purchases are
@@ -271,16 +298,26 @@ someone who is not coming. Enabling the account does not put them back on duty.
 **Current deliveries** (`/delivery/deliveries`, `DeliveriesPage.jsx`) is the run
 itself, described under the checkout flow above. `delivery_personnel.active_status`
 is the schema's own `('available','on_delivery','unavailable')` CHECK, and the
-vehicle columns come from migration `005_delivery_vehicle_fields.sql`.
+vehicle columns are defined directly in `server/sql/schema.sql`.
 
 **Marking an order delivered is what pays the courier**, and it happens inside that one
-transition: `COURIER_BASE_FEE + COURIER_RATE × total_amount` is credited to
-`delivery_personnel.earnings` in the same statement that completes the cash payment, with
-the constants named in `orderQueries.js` rather than inlined. It cannot pay twice, and not
+transition: the order's own `delivery_cost` is credited to `delivery_personnel.earnings`
+in the same procedure that completes the cash payment and credits each shop for its
+lines. That column was written at checkout as `COURIER_BASE_FEE + COURIER_RATE ×
+total_amount`, with the constants named in `orderQueries.js` rather than inlined, and
+`settle_delivery` reads it back rather than recomputing it — so what the customer was
+charged is exactly what the courier is paid, and changing a constant later cannot
+retroactively move money on an order already placed. It cannot pay twice, and not
 because of a second guard: the status update is a compare-and-set that moves one row
 exactly once, so a courier tapping "delivered" twice gets a `409` from the statement that
-would have paid them. `delivery_cost` is not part of the calculation — that is what the
-customer pays for the trip, not what the trip is paid.
+would have paid them.
+
+**Current deliveries** also carries the return pickups: the returns a shop has accepted
+that no courier has collected yet, with the customer's address and phone, and a **Mark
+collected** button. Any active courier may take one, not only the courier who delivered
+the order — the original courier may since have gone unavailable or been disabled, and a
+pickup only one person can perform is a pickup that can stall forever. The customer has
+already been refunded by this point; nothing is paid at the door, and the card says so.
 
 ## Catalog discovery — search, filtering and facets
 
@@ -354,9 +391,21 @@ action beside it.
 
 **Account settings → Payments** (`/account/payments`, `AccountPaymentsPage.jsx`) is the
 customer's own payment history: method, status, amount and `paid_at` per order, with a
-link to the order. Case on the platform's commission is deliberately absent — the server
-does not send the field, so there is nothing on the page to hide. It is scoped to the
-session's user id and accepts no user id from the caller.
+link to the order. The amount is shown as the goods plus the delivery charge, because
+that is the whole of what the customer paid and both halves are theirs to see. It is
+scoped to the session's user id and accepts no user id from the caller.
+
+**Order detail is also where a return is asked for.** The panel is always present, even
+before there is anything to return — it is where a customer finds out that returns exist,
+and a missing panel answers none of the questions a missing form raises. Before delivery
+it says the order has to arrive first; after delivery it offers a form that takes the
+listing, how many units and why. The amount is not a field: it is the order line's own
+price, computed by the server, because a form that let a customer name their own refund
+would be asking them to price their own compensation. Below the form is the whole history
+for the order, refusals included — a declined request that vanished would leave the
+customer with no record that they had asked and no way to see why. Two sentences explain
+the flow at the points they matter: an accepted return means a courier will come, and the
+refund was paid when the shop accepted, not when the parcel arrived.
 
 **Current deliveries** (`/delivery/deliveries`, `DeliveriesPage.jsx`) is the
 courier's run: the orders assigned to them that are still `pending` or `shipped`,
@@ -384,15 +433,17 @@ only their own review. Existing historical delivered orders retain review links 
 if a master is discontinued. A customer becomes eligible by having an order
 containing that listing delivered, so eligibility follows the order flow above.
 
-Points, earnings and commission fields are displayed where relevant. No points
-economy exists: `users.point` is read on the profile and never written. Commission,
-courier pay and shop reviews are implemented as stated platform policies with named
-constants — see `docs/REFUNDS_AND_READ_SURFACES.md` for the formulas and the
-per-role read table. Shipping cost defaults to zero. Payment
+Points, balances and earnings are displayed where relevant. No points
+economy exists: `users.point` is read on the profile and never written. The shop
+balance, courier pay and shop reviews are implemented as stated platform policies with
+named constants — see `docs/REFUNDS_AND_READ_SURFACES.md` for the formulas and the
+per-role read table. There is no platform commission anywhere: the customer's payment
+is the shops' goods plus the courier's trip. Shipping cost is a column written at
+placement from those constants. Payment
 is COD bookkeeping, not an online payment gateway; `payments.payment_method` already
 permits `'prepaid'`, so adding a gateway later is a new branch rather than a
-migration. The `permissions` and `role_permissions` tables were dropped
-(`server/sql/migrations/009_drop_permissions.sql`); authorization is
+schema change — and the recharge and refund flows record money without pretending to
+move it. The `permissions` and `role_permissions` tables are absent; authorization is
 `requireRole` per mounted router, so role checks rather than capability rows drive
 every implemented flow.
 
@@ -426,8 +477,13 @@ applicable. `adminRoutes.js` mounts the whole `/admin` surface behind one role g
 | Vendor | GET `/vendor/master-products` | adminCatalogController: available wholesale masters |
 | Vendor | GET, POST `/vendor/listings`; PUT `/vendor/listings/:productId` | vendorController: purchase/list/restock/edit |
 | Vendor | GET `/vendor/purchases` | vendorController: owned wholesale history |
-| Vendor | GET `/vendor/payments` | paymentController: own shops' sales, purchases, refunds and earnings |
-| Customer | GET `/account/payments` | paymentController: own payments, without the platform's commission |
+| Vendor | GET `/vendor/payments` | paymentController: own shops' sales, purchases, refunds and balances |
+| Vendor | GET `/vendor/balance`; POST `/vendor/topups` | vendorController: one shop's balance and movements, and a recharge |
+| Vendor | GET `/vendor/statistics` | vendorController: income per period, top listings and reconciliation |
+| Vendor | GET `/vendor/returns`; PUT `/vendor/returns/:returnId/approve`, `/reject`, `/restock` | returnController: decide a return, and restock it once collected |
+| Customer | GET, POST `/returns` | returnController: own returns, and the request that starts one |
+| Customer | GET `/account/payments` | paymentController: own payments, goods and delivery charge |
+| Delivery | GET `/delivery/returns`; PUT `/delivery/returns/:returnId/collect` | returnController: approved pickups, and collecting one |
 | Public | GET `/shops/:shopId/reviews` | shopReviewController: public shop reviews |
 | Customer | PUT, DELETE `/shops/:shopId/review` | shopReviewController: own shop review, eligibility-gated |
 | Admin | GET `/admin/users` | adminController: paged account list, filter by search/role/status |
@@ -435,7 +491,7 @@ applicable. `adminRoutes.js` mounts the whole `/admin` surface behind one role g
 | Admin | PUT `/admin/users/:userId/status` | adminController: enable/disable and revoke tokens |
 | Admin | GET `/admin/shops` | adminController: paged shop list with owner and listing counts |
 | Admin | PUT `/admin/shops/:shopId/status` | adminController: approve, ban or restore a shop |
-| Admin | GET `/admin/payments` | paymentController: every payment with order, customer and commission |
+| Admin | GET `/admin/payments` | paymentController: every payment with order, customer, goods and delivery charge |
 | Admin | GET `/admin/refunds` | paymentController: every vendor refund with shop, listing and acting admin |
 | Admin | GET `/admin/catalog-metadata` | adminCatalogController: categories/required IDs/attributes |
 | Admin | POST `/admin/attributes` | adminCatalogController: define attribute |
@@ -531,7 +587,8 @@ PostgreSQL constraint errors to JSON; internal errors stay in the server termina
 - `npm run test:e2e`: Playwright. `cart.spec.js` and `catalog.spec.js` use controlled
   API responses for cart and catalog UI edge cases; `checkout.spec.js` does the same
   for checkout, order history and the courier's run; `read-surfaces.spec.js` covers
-  the per-role payment, refund and shop-review views; `imagery.spec.js` covers the
+  the per-role payment, refund, return and shop-review views, including the vendor's
+  income chart; `imagery.spec.js` covers the
   listing-picture fallback chain and the category-to-illustration mapping; `admin.spec.js`
   covers the admin console's tabs, filters and status writes.
   Chromium must be installed; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an

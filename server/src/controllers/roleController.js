@@ -1,3 +1,4 @@
+const transaction = require("../db/transaction");
 const pool = require("../db/pool");
 const q = require("../db/queries/roleQueries");
 const v = require("../utils/input");
@@ -44,7 +45,7 @@ async function updateDeliveryStatus(req, res) {
 
   try {
     const profile = (
-      await pool.query(q.UPDATE_DELIVERY_PROFILE, [
+      await transaction.query(q.UPDATE_DELIVERY_PROFILE, [
         ...fields,
         req.user.user_id,
       ])

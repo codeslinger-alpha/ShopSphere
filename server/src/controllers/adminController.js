@@ -1,3 +1,4 @@
+const transaction = require("../db/transaction");
 const pool = require("../db/pool");
 const v = require("../utils/input");
 const { paginated, parseListQuery } = require("../utils/listQuery");
@@ -40,7 +41,7 @@ async function updateUserStatus(req, res) {
       .status(409)
       .json({ message: "You cannot disable your own administrator account." });
 
-  const result = await pool.query(q.UPDATE_USER_STATUS, [status, id]);
+  const result = await transaction.query(q.UPDATE_USER_STATUS, [status, id]);
   if (!result.rows.length)
     return res.status(404).json({ message: "User not found." });
   return res.json({ message: "User status updated.", user: result.rows[0] });
@@ -71,7 +72,7 @@ async function updateShopStatus(req, res) {
   if (shop.active_status === status)
     return res.json({ message: "Shop status is already up to date.", shop });
 
-  const result = await pool.query(q.UPDATE_SHOP_STATUS, [status, id]);
+  const result = await transaction.query(q.UPDATE_SHOP_STATUS, [status, id]);
   const message =
     status === "disabled"
       ? "Shop disabled and its listings discontinued. Re-enabling the shop will not restore them."

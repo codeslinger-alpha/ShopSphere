@@ -1,7 +1,7 @@
 # ShopSphere schema and ERD
 
 Generated from `server/sql/schema.sql` by `python3 scripts/document-schema.py`.
-The schema contains **21 application tables**. `schema_migrations` is added by the migration runner.
+The schema contains **24 application tables**.
 
 ## Entity relationships
 
@@ -49,7 +49,7 @@ erDiagram
         text logo
         text cover_photo
         text description
-        decimal earnings
+        decimal balance
         timestamp created_at
         varchar active_status
         varchar phone_numbers
@@ -102,6 +102,13 @@ erDiagram
         numeric amount
         varchar reason
         int removed_by FK
+        timestamp created_at
+    }
+    shopTopups["shop_topups"] {
+        int topup_id PK
+        int shop_id FK
+        numeric amount
+        varchar method
         timestamp created_at
     }
     attributes["attributes"] {
@@ -158,7 +165,6 @@ erDiagram
         int delivery_person_id FK
         timestamp delivered_at
         numeric total_amount
-        decimal platform_commission
         numeric delivery_cost
         timestamp created_at
         int shipping_address FK
@@ -176,7 +182,32 @@ erDiagram
         int prod_id PK, FK
         int quantity
         numeric unit_price
-        decimal platform_commission
+    }
+    productReturns["product_returns"] {
+        int return_id PK
+        int order_id FK
+        int prod_id FK
+        int user_id FK
+        int shop_id FK
+        int quantity
+        text reason
+        varchar status
+        numeric refund_amount
+        text decision_note
+        timestamp decided_at
+        int collected_by FK
+        timestamp collected_at
+        timestamp restocked_at
+        timestamp created_at
+    }
+    customerRefunds["customer_refunds"] {
+        int refund_id PK
+        int return_id FK
+        int order_id FK
+        int user_id FK
+        int shop_id FK
+        numeric amount
+        timestamp created_at
     }
     countries ||..o{ locations : "country_id"
     roles |o..o{ users : "user_role"
@@ -193,6 +224,7 @@ erDiagram
     products ||..o{ vendorRefunds : "prod_id"
     masterProducts ||..o{ vendorRefunds : "master_prod_id"
     users ||..o{ vendorRefunds : "removed_by"
+    shops ||..o{ shopTopups : "shop_id"
     categories ||--o{ categoryAttributes : "category_id"
     attributes ||--o{ categoryAttributes : "attribute_id"
     masterProducts ||--o{ attributeValues : "master_prod_id"
@@ -212,12 +244,21 @@ erDiagram
     orders ||..o{ payments : "order_id"
     orders ||--o{ orderItems : "order_id"
     products ||--o{ orderItems : "prod_id"
+    orders ||..o{ productReturns : "order_id"
+    products ||..o{ productReturns : "prod_id"
+    users ||..o{ productReturns : "user_id"
+    shops ||..o{ productReturns : "shop_id"
+    deliveryPersonnel |o..o{ productReturns : "collected_by"
+    productReturns ||..o{ customerRefunds : "return_id"
+    orders ||..o{ customerRefunds : "order_id"
+    users ||..o{ customerRefunds : "user_id"
+    shops ||..o{ customerRefunds : "shop_id"
 ```
 
 ## Relational definitions
 
 Composite PK means that the listed PK columns jointly identify a row.
-Required reflects NOT NULL/PK and the later status-column ALTER statements.
+Required reflects NOT NULL and primary-key declarations in CREATE TABLE.
 Refer to the SQL file for exact CHECK expressions, identity generation and defaults.
 
 ### countries
@@ -261,7 +302,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `created_at` | `TIMESTAMP` | — | No | DEFAULT CURRENT_TIMESTAMP |
 | `point` | `int` | — | Yes | default 0 not null |
 | `token_version` | `INT` | — | Yes | NOT NULL DEFAULT 0 |
-| `active_status` | `varchar` | — | Yes | check(active_status in ('active','disabled')) default 'active' |
+| `active_status` | `varchar` | — | Yes | NOT NULL check(active_status in ('active','disabled')) default 'active' |
 
 ### shops
 
@@ -273,9 +314,9 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `logo` | `TEXT` | — | No |  |
 | `cover_photo` | `TEXT` | — | No |  |
 | `description` | `TEXT` | — | No |  |
-| `earnings` | `decimal` | — | No | default 0 |
+| `balance` | `NUMERIC(12,2)` | — | Yes | NOT NULL DEFAULT 0 |
 | `created_at` | `TIMESTAMP` | — | No | DEFAULT CURRENT_TIMESTAMP |
-| `active_status` | `varchar` | — | Yes | check(active_status in ('active','disabled','pending')) default 'active' |
+| `active_status` | `varchar` | — | Yes | NOT NULL check(active_status in ('active','disabled','pending')) default 'active' |
 | `phone_numbers` | `VARCHAR(20)` | — | No |  |
 | `address` | `INT` | FK | No | REFERENCES locations(location_id) on delete set null |
 
@@ -299,7 +340,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `category_id` | `INT` | FK | Yes | REFERENCES categories(category_id) on delete restrict not null |
 | `wholesale_price` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (wholesale_price >= 0) |
 | `name` | `VARCHAR` | — | Yes | not null |
-| `active_status` | `VARCHAR` | — | Yes | check(active_status in ('available','discontinued')) default 'available' |
+| `active_status` | `VARCHAR` | — | Yes | NOT NULL check(active_status in ('available','discontinued')) default 'available' |
 | `date_created` | `TIMESTAMP` | — | No | default CURRENT_TIMESTAMP |
 
 ### products
@@ -313,7 +354,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `description` | `TEXT` | — | No |  |
 | `shop_id` | `INT` | FK | Yes | references shops(shop_id) not null |
 | `in_stock` | `INT` | — | Yes | NOT NULL DEFAULT 0 CHECK (in_stock >= 0) |
-| `discontinued` | `boolean` | — | Yes | default false |
+| `discontinued` | `boolean` | — | Yes | NOT NULL default false |
 | `created_at` | `TIMESTAMP` | — | No | DEFAULT CURRENT_TIMESTAMP |
 | `unit_price` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (unit_price >= 0) |
 
@@ -341,6 +382,16 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `amount` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (amount >= 0) |
 | `reason` | `VARCHAR` | — | Yes | NOT NULL CHECK (reason IN ('admin_removal', 'shop_closed')) |
 | `removed_by` | `INT` | FK | Yes | REFERENCES users(user_id) ON DELETE RESTRICT NOT NULL |
+| `created_at` | `TIMESTAMP` | — | Yes | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### shop_topups
+
+| Column | SQL type | Key | Required | Definition |
+| --- | --- | --- | --- | --- |
+| `topup_id` | `INT` | PK | Yes | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| `shop_id` | `INT` | FK | Yes | REFERENCES shops(shop_id) ON DELETE RESTRICT NOT NULL |
+| `amount` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (amount > 0) |
+| `method` | `VARCHAR` | — | Yes | NOT NULL CHECK (method IN ('card', 'bank_transfer', 'cash')) |
 | `created_at` | `TIMESTAMP` | — | Yes | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
 ### attributes
@@ -411,7 +462,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `vehicle_number` | `VARCHAR` | — | No |  |
 | `license_number` | `VARCHAR` | — | No |  |
 | `vehicle_model` | `VARCHAR` | — | No |  |
-| `active_status` | `varchar` | — | Yes | check(active_status in ('available','on_delivery','unavailable')) default 'available' |
+| `active_status` | `varchar` | — | Yes | NOT NULL check(active_status in ('available','on_delivery','unavailable')) default 'available' |
 | `earnings` | `decimal` | — | No |  |
 
 ### orders
@@ -419,13 +470,12 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | Column | SQL type | Key | Required | Definition |
 | --- | --- | --- | --- | --- |
 | `order_id` | `INT` | PK | Yes | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| `order_status` | `VARCHAR` | — | Yes | check(order_status in ('pending','shipped','delivered','cancelled')) default 'pending' |
+| `order_status` | `VARCHAR` | — | Yes | NOT NULL check(order_status in ('pending','shipped','delivered','cancelled')) default 'pending' |
 | `user_id` | `INT` | FK | Yes | REFERENCES users(user_id) not null |
 | `delivery_person_id` | `INT` | FK | No | REFERENCES delivery_personnel(delivery_person_id) default null |
 | `delivered_at` | `TIMESTAMP` | — | No | default null |
 | `total_amount` | `NUMERIC(12,2)` | — | Yes | NOT NULL DEFAULT 0 CHECK (total_amount >= 0) |
-| `platform_commission` | `DECIMAL` | — | No | default 0 |
-| `delivery_cost` | `NUMERIC(12,2)` | — | No | default 0 |
+| `delivery_cost` | `NUMERIC(12,2)` | — | Yes | NOT NULL default 0 |
 | `created_at` | `TIMESTAMP` | — | No | DEFAULT CURRENT_TIMESTAMP |
 | `shipping_address` | `INT` | FK | Yes | REFERENCES locations(location_id)on delete restrict not null |
 
@@ -437,7 +487,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `order_id` | `INT` | FK | Yes | REFERENCES orders(order_id) not null |
 | `amount` | `DECIMAL` | — | Yes | not null |
 | `payment_method` | `VARCHAR` | — | Yes | check(payment_method in ('prepaid','cash_on_delivery')) not null |
-| `payment_status` | `VARCHAR` | — | Yes | check(payment_status in ('pending','completed','failed')) default 'pending' |
+| `payment_status` | `VARCHAR` | — | Yes | NOT NULL check(payment_status in ('pending','completed','failed')) default 'pending' |
 | `paid_at` | `TIMESTAMP` | — | No | DEFAULT CURRENT_TIMESTAMP |
 
 ### order_items
@@ -448,7 +498,38 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 | `prod_id` | `INT` | PK FK | Yes | REFERENCES products(prod_id) not null |
 | `quantity` | `INT` | — | Yes | not null CHECK (quantity > 0) |
 | `unit_price` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (unit_price >= 0) |
-| `platform_commission` | `DECIMAL` | — | No | default 0 |
+
+### product_returns
+
+| Column | SQL type | Key | Required | Definition |
+| --- | --- | --- | --- | --- |
+| `return_id` | `INT` | PK | Yes | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| `order_id` | `INT` | FK | Yes | REFERENCES orders(order_id) ON DELETE RESTRICT NOT NULL |
+| `prod_id` | `INT` | FK | Yes | REFERENCES products(prod_id) ON DELETE RESTRICT NOT NULL |
+| `user_id` | `INT` | FK | Yes | REFERENCES users(user_id) ON DELETE RESTRICT NOT NULL |
+| `shop_id` | `INT` | FK | Yes | REFERENCES shops(shop_id) ON DELETE RESTRICT NOT NULL |
+| `quantity` | `INT` | — | Yes | NOT NULL CHECK (quantity > 0) |
+| `reason` | `TEXT` | — | No |  |
+| `status` | `VARCHAR` | — | Yes | NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'approved', 'rejected', 'collected', 'restocked')) |
+| `refund_amount` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (refund_amount >= 0) |
+| `decision_note` | `TEXT` | — | No |  |
+| `decided_at` | `TIMESTAMP` | — | No |  |
+| `collected_by` | `INT` | FK | No | REFERENCES delivery_personnel(delivery_person_id) |
+| `collected_at` | `TIMESTAMP` | — | No |  |
+| `restocked_at` | `TIMESTAMP` | — | No |  |
+| `created_at` | `TIMESTAMP` | — | Yes | NOT NULL DEFAULT CURRENT_TIMESTAMP |
+
+### customer_refunds
+
+| Column | SQL type | Key | Required | Definition |
+| --- | --- | --- | --- | --- |
+| `refund_id` | `INT` | PK | Yes | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| `return_id` | `INT` | FK | Yes | REFERENCES product_returns(return_id) ON DELETE RESTRICT NOT NULL |
+| `order_id` | `INT` | FK | Yes | REFERENCES orders(order_id) ON DELETE RESTRICT NOT NULL |
+| `user_id` | `INT` | FK | Yes | REFERENCES users(user_id) ON DELETE RESTRICT NOT NULL |
+| `shop_id` | `INT` | FK | Yes | REFERENCES shops(shop_id) ON DELETE RESTRICT NOT NULL |
+| `amount` | `NUMERIC(12,2)` | — | Yes | NOT NULL CHECK (amount >= 0) |
+| `created_at` | `TIMESTAMP` | — | Yes | NOT NULL DEFAULT CURRENT_TIMESTAMP |
 
 ## Normalization and deliberate exceptions
 
@@ -456,20 +537,27 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 - Many-to-many relationships use category_attributes, attribute_values, cart_items, wish_list_items, product_reviews, shop_reviews and order_items.
 - Listing name/images duplicate master identity for compatibility with the original schema; master edits synchronize them through the API. Direct SQL maintenance must preserve this rule. This is a deliberate denormalization rather than a claim of strict 3NF for every table.
 - Wholesale and order unit prices are historical snapshots. They must not change when current catalog prices change.
-- Order total is a derived cache maintained by a trigger, and platform commission is a separate derived column per line and per order, so gross value and platform revenue never share a field.
-- Points retain the existing schema but have no accounting policy; `users.point` is read and never written. Earnings and commission do have one, invented rather than supplied: see docs/REFUNDS_AND_READ_SURFACES.md.
+- Order total is a derived cache maintained by a trigger, and `shops.balance` is a running total of delivered sales, recharges, wholesale purchases and refunds, so gross value and a shop's spendable money never share a field.
+- Points retain the existing schema but have no accounting policy; `users.point` is read and never written. The shop balance and courier earnings do have one, invented rather than supplied: see docs/REFUNDS_AND_READ_SURFACES.md. There is no platform commission anywhere.
 - Attribute values are text (an entity/attribute/value model); category requirements are enforced on available masters at transaction commit.
 - Images and phone_numbers currently store one URL/phone per row. Multi-image and multi-phone storage is not modeled as comma-separated lists.
-- There is no permissions/role_permissions pair. Both were seed-only data no code consulted, and 009_drop_permissions.sql removed them; authorization is requireRole per mounted router.
+- There is no permissions/role_permissions pair. They are not part of the canonical schema; authorization is requireRole per mounted router.
+
+## Computed function and workflow procedure
+
+- `fn_order_subtotal(order_id)` returns the numeric sum of historical line prices times quantities. Checkout reads and the order-total trigger call it.
+- `settle_delivery(order_id, courier_id, result)` is called by the delivery API inside an explicit transaction. It advances an assigned shipped order, completes its pending payment, credits the courier the order's own stored delivery cost and credits each shop for its own lines, and returns a JSON result. A stale transition returns NULL so the controller can return 404/409.
+- Transaction control stays with the caller; a procedure failure rolls back all its writes. `tests/order.integration.test.js` verifies settlement rollback and the delivery suites verify exactly-once earnings.
 
 ## Trigger behavior
 
 - Hard deletion is blocked for users, shops, master_products, products, delivery_personnel and orders; status fields preserve history.
 - Removing a role disables affected users. Disabling a user disables their shops and makes their delivery profile unavailable.
 - Disabling a shop discontinues listings. An unavailable courier releases pending/shipped assignments.
-- Cancelling a pending order restores stock once, detaches its courier, marks pending payments failed and voids the platform commission; line items remain.
+- Cancelling a pending order restores stock once, detaches its courier and marks pending payments failed; line items remain.
 - Order status transitions are restricted; line-item changes recalculate both old and new order totals when moved.
 - Product reviews require a delivered order for that exact customer/listing, and shop reviews require a delivered order for any listing from that shop, on both INSERT and UPDATE.
+- A return is only legal on a delivered order, and the units returned across all non-rejected requests for one order line cannot exceed the quantity bought. A partial unique index keeps one open request per line; a rejected one frees the line for a second attempt.
 - Deferred category-value constraints validate masters, requirements and value edits atomically.
 
 Country/category cascade deletes exist in the original DDL. There are no public country-delete endpoints, and the admin API rejects deletion of categories with children or master products. Shop-owner/delivery role ownership is enforced by API write paths, not by role-specific foreign keys.

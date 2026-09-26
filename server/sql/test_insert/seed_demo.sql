@@ -25,11 +25,6 @@ WHERE NOT EXISTS (
     SELECT 1 FROM locations l WHERE l.street_address = v.street AND l.country_id = c.country_id
 );
 
--- No permission or grant rows: those tables are gone (see
--- sql/migrations/009_drop_permissions.sql). Authorization here is
--- requireRole(roleName) on a mounted router, and the seed only has to create the
--- users that hold those roles.
-
 -- 2. Six accounts: two customers/vendors allow ownership-isolation demonstrations.
 -- Each hash uses its own bcrypt salt, with cost 12.
 -- Customers: CustomerPass123! | Vendors: VendorPass123!
@@ -105,12 +100,27 @@ JOIN shops s ON s.owner = u.user_id AND s.name = v.shop
 JOIN master_products mp ON mp.name = v.product AND mp.manufacturer = 'ShopSphere Demo'
 WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.shop_id = s.shop_id AND p.master_prod_id = mp.master_prod_id);
 
--- Historical wholesale acquisitions corresponding to the demo listings.
-INSERT INTO shop_purchases (shop_id, master_prod_id, quantity, wholesale_unit_price)
-SELECT p.shop_id, p.master_prod_id, p.in_stock + 5, mp.wholesale_price
-FROM products p JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
-WHERE mp.manufacturer = 'ShopSphere Demo'
-  AND NOT EXISTS (SELECT 1 FROM shop_purchases sp WHERE sp.shop_id=p.shop_id AND sp.master_prod_id=p.master_prod_id);
+-- Historical wholesale acquisitions corresponding to the demo listings. The
+-- balance is debited for exactly the rows this statement inserts, so the fixture
+-- replays its own ledger instead of leaving the spend unrecorded: the balance
+-- identity the tests assert — delivered sales + top-ups − purchases + refunds —
+-- can only hold if the stock a shop bought was actually taken out of its money.
+-- RETURNING carries only the rows inserted on this run, so a reseed debits
+-- nothing.
+WITH bought AS (
+    INSERT INTO shop_purchases (shop_id, master_prod_id, quantity, wholesale_unit_price)
+    SELECT p.shop_id, p.master_prod_id, p.in_stock + 5, mp.wholesale_price
+    FROM products p JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
+    WHERE mp.manufacturer = 'ShopSphere Demo'
+      AND NOT EXISTS (SELECT 1 FROM shop_purchases sp WHERE sp.shop_id=p.shop_id AND sp.master_prod_id=p.master_prod_id)
+    RETURNING shop_id, quantity * wholesale_unit_price AS cost
+), spent AS (
+    SELECT shop_id, SUM(cost) AS cost FROM bought GROUP BY shop_id
+)
+UPDATE shops s
+SET balance = s.balance - spent.cost
+FROM spent
+WHERE s.shop_id = spent.shop_id;
 
 -- 4. Attribute definitions, allowed category attributes, and product values.
 INSERT INTO attributes (name, description)
@@ -172,6 +182,8 @@ ON CONFLICT DO NOTHING;
 
 -- 6. Fixed timestamps identify the two historical demo orders across reruns.
 -- The delivered order spans both shops; the other order awaits assignment.
+CREATE TEMP TABLE seed_base_new_orders (order_id INT PRIMARY KEY) ON COMMIT DROP;
+WITH inserted AS (
 INSERT INTO orders (user_id, order_status, shipping_address, delivery_person_id, created_at, delivered_at)
 SELECT u.user_id, v.status, l.location_id,
        CASE WHEN v.status = 'delivered' THEN d.delivery_person_id ELSE NULL END,
@@ -187,7 +199,9 @@ JOIN users courier ON courier.email = 'delivery@shopsphere.test'
 JOIN delivery_personnel d ON d.delivery_person_id = courier.user_id
 WHERE NOT EXISTS (
     SELECT 1 FROM orders o WHERE o.user_id = u.user_id AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
-);
+)
+RETURNING order_id
+) INSERT INTO seed_base_new_orders SELECT order_id FROM inserted;
 
 -- The schema trigger calculates total_amount from these price snapshots.
 INSERT INTO order_items (order_id, prod_id, quantity, unit_price)
@@ -204,8 +218,20 @@ JOIN users owner_user ON owner_user.email = v.vendor
 JOIN shops s ON s.owner = owner_user.user_id AND s.name = v.shop
 JOIN products p ON p.shop_id = s.shop_id AND p.name = v.product
 JOIN master_products mp ON mp.master_prod_id = p.master_prod_id AND mp.manufacturer = 'ShopSphere Demo'
-WHERE o.order_status <> 'cancelled'
+WHERE o.order_id IN (SELECT order_id FROM seed_base_new_orders)
 ON CONFLICT DO NOTHING;
+
+-- Price the trip the way RECORD_DELIVERY_COST does at placement. This has to
+-- land before the payment below, because the payment is the goods plus this
+-- charge — the customer's delivery charge and the courier's pay are one number.
+--
+-- COURIER_BASE_FEE and COURIER_RATE are repeated from
+-- src/db/queries/orderQueries.js, the one place they are defined. A .sql file
+-- cannot import a JavaScript constant, so changing a rate means changing both.
+UPDATE orders o
+SET delivery_cost = ROUND(3 + 0.02 * o.total_amount, 2)
+WHERE o.order_id IN (SELECT order_id FROM seed_base_new_orders)
+  AND o.created_at = TIMESTAMP '2026-09-01 10:00:00';
 
 -- No money is charged: these are fictional cash-on-delivery records.
 INSERT INTO payments (order_id, amount, payment_method, payment_status, paid_at)
@@ -213,7 +239,8 @@ SELECT o.order_id, o.total_amount + o.delivery_cost, 'cash_on_delivery',
        CASE WHEN o.order_status = 'delivered' THEN 'completed' ELSE 'pending' END,
        CASE WHEN o.order_status = 'delivered' THEN o.delivered_at ELSE NULL END
 FROM orders o JOIN users u ON u.user_id = o.user_id
-WHERE u.email IN ('customer@shopsphere.test', 'customer2@shopsphere.test')
+WHERE o.order_id IN (SELECT order_id FROM seed_base_new_orders)
+  AND u.email IN ('customer@shopsphere.test', 'customer2@shopsphere.test')
   AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
   AND o.order_status IN ('delivered', 'pending')
   AND NOT EXISTS (SELECT 1 FROM payments pay WHERE pay.order_id = o.order_id);
@@ -238,40 +265,73 @@ WHERE u.email = 'customer@shopsphere.test' AND o.order_status = 'delivered'
   AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
 ON CONFLICT DO NOTHING;
 
--- 8. The money columns the placement and delivery rules fill.
--- The commission and courier-pay rules were written after this file was, so a
--- seeded order would otherwise show the admin payments screen a column of zeroes
--- and the courier a balance that never moved. The figures below are exactly what
--- placing and delivering these orders would have produced.
---
--- The rates mirror PLATFORM_COMMISSION_RATE, COURIER_BASE_FEE and COURIER_RATE in
--- src/db/queries/orderQueries.js — the one place they are defined. They are repeated
--- here because a .sql file cannot import a JavaScript constant, and changing a
--- rate means changing both.
+-- 8. The courier earnings and shop balances the placement and delivery rules fill.
+-- Both rules were written after this file was, so a seeded delivered order would
+-- otherwise leave the courier a balance that never moved and the shops unpaid for
+-- stock that had demonstrably sold. The figures below are exactly what settling
+-- those orders would have produced.
 --
 -- Scoped to the seed's own orders by created_at, so this never rewrites a real
--- order. Cancelled orders are skipped: fn_cleanup_cancelled_order zeroes their
--- commission on purpose.
-UPDATE order_items oi
-SET platform_commission = ROUND(oi.quantity * oi.unit_price * 0.05, 2)
-FROM orders o
-WHERE o.order_id = oi.order_id
-  AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
-  AND o.order_status <> 'cancelled';
-
--- Summed from the lines, the way RECORD_PLATFORM_COMMISSION does it at placement.
-UPDATE orders o
-SET platform_commission = (
-    SELECT COALESCE(SUM(oi.platform_commission), 0)
-    FROM order_items oi WHERE oi.order_id = o.order_id
-)
-WHERE o.created_at = TIMESTAMP '2026-09-01 10:00:00'
-  AND o.order_status <> 'cancelled';
-
+-- order, and the temp table holds only orders inserted on this run, so a reseed
+-- credits nothing a second time.
 UPDATE delivery_personnel d
-SET earnings = 3 + ROUND(0.02 * o.total_amount, 2)
+SET earnings = COALESCE(d.earnings, 0) + o.delivery_cost
 FROM orders o
 WHERE o.delivery_person_id = d.delivery_person_id
+  AND o.order_id IN (SELECT order_id FROM seed_base_new_orders)
   AND o.created_at = TIMESTAMP '2026-09-01 10:00:00'
   AND o.order_status = 'delivered';
 
+-- Each shop is paid for its own lines, in full, the way settle_delivery does it.
+UPDATE shops s
+SET balance = s.balance + goods.amount
+FROM (
+    SELECT p.shop_id, SUM(oi.quantity * oi.unit_price) AS amount
+    FROM order_items oi
+    JOIN orders o ON o.order_id = oi.order_id
+    JOIN products p ON p.prod_id = oi.prod_id
+    WHERE o.order_id IN (SELECT order_id FROM seed_base_new_orders)
+      AND o.order_status = 'delivered'
+    GROUP BY p.shop_id
+) goods
+WHERE s.shop_id = goods.shop_id;
+
+-- The capital each shop bought its stock with, and the charge for it.
+--
+-- shops.balance is a running total of sales, top-ups, purchases and refunds, so a
+-- fixture that wrote the purchases above without the money that funded them would
+-- leave a balance reconciling with nothing. Each shop is brought up to its
+-- purchases plus a float, and the ledger row is written for exactly the gap.
+--
+-- seed_extended.sql carries the same statement, so the two compose: whichever
+-- runs second funds only what it added, and a reseed finds no gap and writes
+-- nothing at all.
+--
+-- The float is deliberate: a shop with no capital could not buy anything through
+-- the API, which is the whole point of the column.
+WITH spend AS (
+    SELECT s.shop_id, COALESCE(SUM(sp.quantity * sp.wholesale_unit_price), 0) AS purchases
+    FROM shops s
+    LEFT JOIN shop_purchases sp ON sp.shop_id = s.shop_id
+    GROUP BY s.shop_id
+), topped AS (
+    SELECT t.shop_id, COALESCE(SUM(t.amount), 0) AS funded
+    FROM shop_topups t
+    GROUP BY t.shop_id
+), gap AS (
+    SELECT s.shop_id, s.purchases + 500 - COALESCE(t.funded, 0) AS amount
+    FROM spend s
+    LEFT JOIN topped t ON t.shop_id = s.shop_id
+    WHERE s.purchases + 500 - COALESCE(t.funded, 0) > 0
+), added AS (
+    INSERT INTO shop_topups (shop_id, amount, method, created_at)
+    SELECT shop_id, amount, 'bank_transfer', TIMESTAMP '2026-07-01 08:00:00'
+    FROM gap
+    RETURNING shop_id, amount
+)
+UPDATE shops s
+SET balance = s.balance + a.amount
+FROM added a
+WHERE a.shop_id = s.shop_id;
+
+DROP TABLE seed_base_new_orders;

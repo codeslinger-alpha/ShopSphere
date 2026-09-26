@@ -71,7 +71,7 @@ function buildShopListQuery({ q, status, page, limit }) {
 
   return {
     text: `
-      SELECT s.shop_id, s.name, s.active_status, s.created_at, s.earnings,
+      SELECT s.shop_id, s.name, s.active_status, s.created_at, s.balance,
              u.user_id AS owner_id, u.name AS owner_name, u.email AS owner_email,
              u.active_status AS owner_status,
              l.city, l.country_id,

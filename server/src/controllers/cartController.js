@@ -1,3 +1,4 @@
+const transaction = require("../db/transaction");
 const pool = require("../db/pool");
 const {
   ADD_CART_ITEM,
@@ -26,7 +27,7 @@ async function addCartItem(req, res) {
       .json({ message: "Product ID and quantity must be positive integers." });
   }
 
-  const result = await pool.query(ADD_CART_ITEM, [
+  const result = await transaction.query(ADD_CART_ITEM, [
     req.user.user_id,
     productId,
     quantity,
@@ -58,7 +59,7 @@ async function updateCartItem(req, res) {
       .json({ message: "Product ID and quantity must be positive integers." });
   }
 
-  const result = await pool.query(UPDATE_CART_ITEM, [
+  const result = await transaction.query(UPDATE_CART_ITEM, [
     quantity,
     req.user.user_id,
     productId,
@@ -97,7 +98,7 @@ async function removeCartItem(req, res) {
       .json({ message: "Product ID must be a positive integer." });
   }
 
-  const result = await pool.query(DELETE_CART_ITEM, [
+  const result = await transaction.query(DELETE_CART_ITEM, [
     req.user.user_id,
     productId,
   ]);

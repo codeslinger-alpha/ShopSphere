@@ -358,6 +358,26 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       },
     );
 
+    await check("procedure failure rolls back delivery, payment and courier earnings", async () => {
+      await setCart(customer.user_id, [[watch, 1]]);
+      const placed = await placeOrder(customer);
+      assert.equal(placed.status, 201);
+      const path = `/api/delivery/orders/${placed.data.order.order_id}/status`;
+      assert.equal((await request(path, { user: courier, method: "PUT", body: { order_status: "shipped" } })).status, 200);
+      const balance = (await client.query("SELECT earnings FROM delivery_personnel WHERE delivery_person_id=$1", [courier.user_id])).rows[0].earnings;
+      await client.query(`CREATE FUNCTION reject_settlement() RETURNS TRIGGER AS $$
+        BEGIN RAISE EXCEPTION 'Simulated settlement failure'; END; $$ LANGUAGE plpgsql;
+        CREATE TRIGGER reject_settlement BEFORE UPDATE ON payments
+        FOR EACH ROW EXECUTE FUNCTION reject_settlement()`);
+      const failed = await request(path, { user: courier, method: "PUT", body: { order_status: "delivered" } });
+      assert.equal(failed.status, 409);
+      const order = (await request(`/api/orders/${placed.data.order.order_id}`)).data;
+      assert.equal(order.order_status, "shipped");
+      assert.equal(order.payment_status, "pending");
+      assert.equal(order.delivered_at, null);
+      assert.equal((await client.query("SELECT earnings FROM delivery_personnel WHERE delivery_person_id=$1", [courier.user_id])).rows[0].earnings, balance);
+    });
+
     await check("a delivery cannot skip the shipped step", async () => {
       await setStock(watch, 3);
       await setCart(customer.user_id, [[watch, 1]]);

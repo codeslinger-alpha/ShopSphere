@@ -1,3 +1,4 @@
+const transaction = require("../db/transaction");
 const pool = require("../db/pool");
 const v = require("../utils/input");
 const q = require("../db/queries/shopReviewQueries");
@@ -44,7 +45,7 @@ async function save(req, res) {
       "Only customers with a delivered order from this shop can review it.",
     );
 
-  const result = await pool.query(q.UPSERT_SHOP_REVIEW, [
+  const result = await transaction.query(q.UPSERT_SHOP_REVIEW, [
     req.user.user_id,
     shopId,
     rating,
@@ -56,7 +57,7 @@ async function save(req, res) {
 async function remove(req, res) {
   if (
     !(
-      await pool.query(q.DELETE_OWN_SHOP_REVIEW, [
+      await transaction.query(q.DELETE_OWN_SHOP_REVIEW, [
         req.user.user_id,
         v.id(req.params.shopId, "Shop"),
       ])

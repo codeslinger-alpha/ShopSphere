@@ -4,7 +4,7 @@
 // The difference worth stating: eligibility for a product review is a delivered
 // order containing that product; eligibility for a shop review is a delivered
 // order containing any listing from that shop. Both are enforced by a trigger on
-// the table — fn_verify_shop_review_purchase, added in migrations/007 — with the
+// the table — fn_verify_shop_review_purchase in schema.sql — with the
 // endpoint's own check existing only so a refusal arrives as a sentence rather
 // than as a 500 from a raised exception.
 

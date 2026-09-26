@@ -1,3 +1,4 @@
+const transaction = require("../db/transaction");
 const pool = require("../db/pool");
 const v = require("../utils/input");
 const q = require("../db/queries/reviewQueries");
@@ -27,7 +28,7 @@ async function save(req, res) {
   const rating = v.id(req.body?.rating, "Rating");
   if (rating > 5) v.fail(400, "Rating must be between 1 and 5.");
   const review = v.string(req.body?.review, "Review", 10000);
-  const result = await pool.query(
+  const result = await transaction.query(
     q.UPSERT_REVIEW,
     [req.user.user_id, v.id(req.params.productId), rating, review],
   );
@@ -36,7 +37,7 @@ async function save(req, res) {
 async function remove(req, res) {
   if (
     !(
-      await pool.query(
+      await transaction.query(
         q.DELETE_OWN_REVIEW,
         [req.user.user_id, v.id(req.params.productId)],
       )

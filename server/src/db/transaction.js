@@ -1,7 +1,7 @@
 const pool = require("./pool");
 const { timedQuery } = require("./logger");
 
-module.exports = async function transaction(work) {
+async function transaction(work) {
   const client = await pool.connect();
   try {
     await timedQuery(client, "BEGIN");
@@ -21,4 +21,8 @@ module.exports = async function transaction(work) {
   } finally {
     client.release();
   }
-};
+}
+
+// Single-statement writes still explicitly commit or roll back.
+transaction.query = (text, values) => transaction((client) => client.query(text, values));
+module.exports = transaction;

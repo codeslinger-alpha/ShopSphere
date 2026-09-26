@@ -64,7 +64,7 @@ async function createAttribute(req, res) {
   res.status(201).json({
     message: "Attribute created.",
     attribute: (
-      await pool.query(q.CREATE_ATTRIBUTE, [name, description])
+      await transaction.query(q.CREATE_ATTRIBUTE, [name, description])
     ).rows[0],
   });
 }
@@ -220,7 +220,7 @@ async function saveMaster(req, res) {
 // Pay a vendor for the stock they still hold of one listing.
 //
 // Both removal paths go through here — removing a listing, and removing a master
-// product with all its listings — so the LIFO rule and the earnings credit
+// product with all its listings — so the LIFO rule and the balance credit
 // cannot drift apart between the two.
 //
 // The caller must already have claimed the listing (the guarded UPDATE in
@@ -246,7 +246,7 @@ async function refundListing(c, listing, adminId, reason) {
   // A listing can legitimately be out of stock, which refunds nothing and is not
   // an error — the removal still happened and the ledger row records it.
   if (attribution.units > 0)
-    await c.query(q.CREDIT_SHOP_EARNINGS, [
+    await c.query(q.CREDIT_SHOP_BALANCE, [
       listing.shop_id,
       attribution.amount,
     ]);

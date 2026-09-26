@@ -29,7 +29,10 @@ async function updateProfile(req, res) {
     req.user.role_name === "delivery",
   );
   const profile = await transaction(async (c) => {
-    await c.query(q.LOCK_USER, [req.user.user_id]);
+    // No explicit row lock on users is needed, and an earlier one was removed:
+    // UPDATE_PROFILE below takes that same row lock itself, so a second save of
+    // this profile waits there. Taking it here instead would only have held the
+    // lock across the address insert, which touches no row the lock protects.
     // Insert a new address so shared shop addresses and old orders remain unchanged.
     const address = await c.query(CREATE_LOCATION, location);
     await c.query(

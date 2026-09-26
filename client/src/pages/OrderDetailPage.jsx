@@ -133,6 +133,154 @@ function ShopReviews({ shopId, shopName }) {
   );
 }
 
+// Returning something from this order.
+//
+// Only a delivered order can be returned, and the server says so too, so the
+// form is offered only then. What the customer chooses here is the listing and
+// how many units; the amount they are owed is not a field, because it is the
+// order line's own price and the server computes it. A form that let them name
+// their own refund would be asking them to price their own compensation.
+//
+// The list below the form is the whole history for this order, including
+// refusals — a declined request that vanished would leave the customer with no
+// record that they had asked and no way to see why.
+function OrderReturns({ order }) {
+  const all = useResource("/returns");
+  const task = useTask();
+  const [open, setOpen] = useState(false);
+
+  const mine = (all.data ?? []).filter(
+    (item) => item.order_id === Number(order.order_id),
+  );
+  const withOpenReturn = new Set(
+    mine
+      .filter((item) => item.status !== "rejected")
+      .map((item) => item.prod_id),
+  );
+
+  async function send(event) {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.currentTarget));
+    const ok = await task.run(() =>
+      api("/returns", {
+        method: "POST",
+        body: JSON.stringify({ ...body, order_id: order.order_id }),
+      }),
+    );
+    if (ok) {
+      setOpen(false);
+      all.reload();
+    }
+  }
+
+  const canAsk =
+    order.order_status === "delivered" &&
+    order.items.some((item) => !withOpenReturn.has(item.prod_id));
+
+  return (
+    <section className="panel">
+      <h2>Returns</h2>
+      <Feedback error={task.error || all.error} message={task.message} />
+
+      {order.order_status !== "delivered" && mine.length === 0 && (
+        <p className="muted">
+          You can return an item once the order has been delivered.
+        </p>
+      )}
+
+      {mine.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Listing</th>
+                <th scope="col">Units</th>
+                <th scope="col">Refund</th>
+                <th scope="col">Status</th>
+                <th scope="col">Shop's answer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mine.map((item) => (
+                <tr key={item.return_id}>
+                  <td>{item.listing_name}</td>
+                  <td>{item.quantity}</td>
+                  <td>${item.refund_amount}</td>
+                  <td>
+                    <span className={`status-pill status-${item.status}`}>
+                      {item.status}
+                    </span>
+                  </td>
+                  <td className="muted">{item.decision_note || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {canAsk &&
+        (open ? (
+          <form className="form" onSubmit={send}>
+            <label>
+              Item
+              <select name="prod_id" required>
+                {order.items
+                  .filter((item) => !withOpenReturn.has(item.prod_id))
+                  .map((item) => (
+                    <option key={item.prod_id} value={item.prod_id}>
+                      {item.name} (up to {item.quantity})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              How many units
+              <input
+                name="quantity"
+                type="number"
+                min="1"
+                max="2147483647"
+                required
+              />
+            </label>
+            <label>
+              Why
+              <textarea
+                name="reason"
+                rows="3"
+                maxLength="2000"
+                required
+                placeholder="What is wrong with it?"
+              />
+            </label>
+            <button className="primary" disabled={task.busy}>
+              Ask to return it
+            </button>{" "}
+            <button type="button" onClick={() => setOpen(false)}>
+              Never mind
+            </button>
+          </form>
+        ) : (
+          <button onClick={() => setOpen(true)}>Return an item</button>
+        ))}
+
+      {mine.some((item) => item.status === "approved") && (
+        <p className="muted">
+          A courier will collect the parcel. Nothing needs doing until they
+          arrive.
+        </p>
+      )}
+      {mine.some((item) => item.status === "restocked") && (
+        <p className="muted">
+          Your refund was paid when the shop accepted the return, not when the
+          parcel arrived.
+        </p>
+      )}
+    </section>
+  );
+}
+
 // One order in full: what was bought, what it cost, where it is going and how the
 // payment stands. Cancelling lives here rather than on the list, because it is the
 // one action on an order and it is only legal while the order is still pending.
@@ -263,6 +411,11 @@ export default function OrderDetailPage() {
               </button>
             </section>
           )}
+
+          {/* Always shown, even before there is anything to return: the panel is
+              where a customer finds out that returns exist, and a missing panel
+              answers none of the questions a missing form raises. */}
+          <OrderReturns order={data} />
 
           {/* One panel per shop rather than per listing: a review is about the
               seller, and two items from the same shop are one seller. */}
