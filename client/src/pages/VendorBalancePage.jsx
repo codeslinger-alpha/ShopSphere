@@ -157,7 +157,7 @@ export default function VendorBalancePage() {
             <h2>Recharge</h2>
             <form onSubmit={recharge}>
               <label>
-                Amount
+                <span>Amount <span className="required-tag" aria-hidden="true">*</span></span>
                 <input
                   type="number"
                   min="0.01"
@@ -185,6 +185,7 @@ export default function VendorBalancePage() {
               <button className="primary" disabled={task.busy}>
                 Recharge balance
               </button>
+              <p className="required-note">*required</p>
             </form>
             <p className="muted">
               There is no payment gateway here. This records the recharge against

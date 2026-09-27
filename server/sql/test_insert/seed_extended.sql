@@ -100,7 +100,7 @@ WHERE REGEXP_LIKE(u.email, '^vendor[0-9]{2}@shopsphere\.test$')
       AND s.name = 'Demo Marketplace ' || TO_NUMBER(REGEXP_SUBSTR(u.email, '[0-9]+')))
 /
 
--- 2. The expanded catalog: eight more categories and 48 master products.
+-- 2. The expanded catalog: eight product categories and 48 master products.
 INSERT INTO categories (name, description)
 SELECT v.name, 'Fictional products for the expanded demonstration.'
 FROM (
@@ -114,7 +114,7 @@ FROM (
     UNION ALL SELECT 'Demo Toys' FROM dual
 ) v
 WHERE NOT EXISTS (
-    SELECT 1 FROM categories c WHERE c.name = v.name AND c.parent_category IS NULL)
+    SELECT 1 FROM categories c WHERE c.name = v.name)
 /
 
 INSERT INTO master_products (manufacturer, name, description, category_id, wholesale_price)
@@ -170,7 +170,7 @@ FROM (
     UNION ALL SELECT 'Demo Toys', 'Demo Board Game', 15 FROM dual
     UNION ALL SELECT 'Demo Toys', 'Demo Art Kit', 11 FROM dual
 ) v
-JOIN categories c ON c.name = v.category AND c.parent_category IS NULL
+JOIN categories c ON c.name = v.category
 WHERE NOT EXISTS (
     SELECT 1 FROM master_products mp
     WHERE mp.manufacturer = 'ShopSphere Expanded Demo' AND mp.name = v.name)
@@ -189,7 +189,6 @@ SELECT c.category_id, a.attribute_id
 FROM categories c CROSS JOIN attributes a
 WHERE c.name IN ('Demo Books', 'Demo Apparel', 'Demo Sports', 'Demo Beauty',
                  'Demo Groceries', 'Demo Toys')
-  AND c.parent_category IS NULL
   AND a.name IN ('Demo Material', 'Demo Color')
   AND NOT EXISTS (
     SELECT 1 FROM category_attributes ca
@@ -588,4 +587,41 @@ JOIN sellable p ON p.n = TO_NUMBER(REGEXP_SUBSTR(u.email, '[0-9]+')) + 1
 WHERE REGEXP_LIKE(u.email, '^customer[0-9]{2}@shopsphere\.test$')
   AND NOT EXISTS (
     SELECT 1 FROM wish_list_items w WHERE w.user_id = u.user_id AND w.prod_id = p.prod_id)
+/
+
+-- 8. Three levels for recursive browsing. Keep existing category IDs and product
+-- assignments. Demo category names identify fixtures even after reparenting.
+INSERT INTO categories (name, description)
+SELECT 'Demo Catalog', 'Root of the fictional department catalog.' FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM categories WHERE name = 'Demo Catalog')
+/
+
+INSERT INTO categories (name, description, parent_category)
+SELECT branch.name, 'Demo department containing product categories.', root.category_id
+FROM (
+    SELECT 'Demo Technology' AS name FROM dual
+    UNION ALL SELECT 'Demo Everyday' FROM dual
+    UNION ALL SELECT 'Demo Leisure' FROM dual
+) branch
+JOIN categories root ON root.name = 'Demo Catalog'
+WHERE NOT EXISTS (SELECT 1 FROM categories c WHERE c.name = branch.name)
+/
+
+MERGE INTO categories child
+USING (
+    SELECT mapping.child_name, parent.category_id AS parent_id
+    FROM (
+        SELECT 'Demo Electronics' AS child_name, 'Demo Technology' AS parent_name FROM dual
+        UNION ALL SELECT 'Demo Home', 'Demo Everyday' FROM dual
+        UNION ALL SELECT 'Demo Apparel', 'Demo Everyday' FROM dual
+        UNION ALL SELECT 'Demo Beauty', 'Demo Everyday' FROM dual
+        UNION ALL SELECT 'Demo Groceries', 'Demo Everyday' FROM dual
+        UNION ALL SELECT 'Demo Books', 'Demo Leisure' FROM dual
+        UNION ALL SELECT 'Demo Sports', 'Demo Leisure' FROM dual
+        UNION ALL SELECT 'Demo Toys', 'Demo Leisure' FROM dual
+    ) mapping
+    JOIN categories parent ON parent.name = mapping.parent_name
+) tree ON (child.name = tree.child_name)
+WHEN MATCHED THEN UPDATE SET child.parent_category = tree.parent_id
+    WHERE child.parent_category IS NULL
 /

@@ -179,3 +179,19 @@ test("a rejected filter reports the server message instead of an empty catalog",
     await expect(page.locator(".product-card")).toHaveCount(0);
     await expect(page.locator(".empty-state")).toHaveCount(0);
 });
+
+test("category children appear only after expanding their parent", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/products");
+    const child = page.getByRole("button", { name: "Computer Accessories", exact: true });
+    await expect(child).toHaveCount(0);
+    const expand = page.getByRole("button", { name: "Expand Computers", exact: true });
+    await expect(expand).toHaveAttribute("aria-expanded", "false");
+    await expand.click();
+    await expect(child).toBeVisible();
+    await child.click();
+    await expect(child).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Collapse Computers", exact: true }).click();
+    await expect(child).toHaveCount(0);
+    await expect(page).toHaveURL(/category_id=23/);
+});

@@ -109,7 +109,7 @@ FROM (
     SELECT 'Demo Electronics' AS name, 'Fictional electronics for testing.' AS description FROM dual
     UNION ALL SELECT 'Demo Home', 'Fictional home accessories for testing.' FROM dual
 ) v
-WHERE NOT EXISTS (SELECT 1 FROM categories c WHERE c.name = v.name AND c.parent_category IS NULL)
+WHERE NOT EXISTS (SELECT 1 FROM categories c WHERE c.name = v.name)
 /
 
 INSERT INTO master_products (manufacturer, name, description, category_id, wholesale_price)
@@ -124,7 +124,7 @@ FROM (
     UNION ALL SELECT 'Demo Desk Lamp', 'USB-powered adjustable desk lamp.',
            'Demo Home', 12.00 FROM dual
 ) v
-JOIN categories c ON c.name = v.category AND c.parent_category IS NULL
+JOIN categories c ON c.name = v.category
 WHERE NOT EXISTS (
     SELECT 1 FROM master_products mp WHERE mp.name = v.name AND mp.manufacturer = 'ShopSphere Demo'
 )
@@ -213,7 +213,7 @@ WHERE NOT EXISTS (SELECT 1 FROM attributes a WHERE a.name = v.name)
 INSERT INTO category_attributes (category_id, attribute_id)
 SELECT c.category_id, a.attribute_id
 FROM categories c CROSS JOIN attributes a
-WHERE c.name IN ('Demo Electronics', 'Demo Home') AND c.parent_category IS NULL
+WHERE c.name IN ('Demo Electronics', 'Demo Home')
   AND a.name IN ('Demo Color', 'Demo Connection')
   AND NOT EXISTS (
     SELECT 1 FROM category_attributes ca

@@ -32,7 +32,7 @@ export default function ProfilePage() {
           >
             <fieldset disabled={task.busy}>
               <label>
-                Name
+                <span>Name <span className="required-tag" aria-hidden="true">*</span></span>
                 <input
                   name="name"
                   defaultValue={p.name}
@@ -42,7 +42,7 @@ export default function ProfilePage() {
                 />
               </label>
               <label>
-                Email
+                <span>Email <span className="required-tag" aria-hidden="true">*</span></span>
                 <input
                   name="email"
                   type="email"
@@ -54,6 +54,7 @@ export default function ProfilePage() {
               <ContactFields value={p} delivery={user.role === "delivery"} />
               <button className="primary">Save changes</button>
             </fieldset>
+            <p className="required-note">*required</p>
           </form>
           <h2>Account information</h2>
           <dl>

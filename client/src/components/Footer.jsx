@@ -91,7 +91,6 @@ export default function Footer() {
 
       <div className="site-footer-inner footer-legal">
         <span>© {new Date().getFullYear()} ShopSphere. A demonstration marketplace.</span>
-        <span>Built with React, Express and PostgreSQL.</span>
       </div>
     </footer>
   );

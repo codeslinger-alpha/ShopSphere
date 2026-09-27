@@ -14,7 +14,8 @@ Run `npm run db:init` against a **new empty Oracle schema**, then
 | --- | ---: |
 | Users | 46 |
 | Shops | 8 |
-| Root categories | 8 |
+| Categories (three levels) | 12 |
+| Root categories | 1 |
 | Master products | 52 |
 | Shop listings | 296 |
 | Orders | 34 |
@@ -27,6 +28,28 @@ The original fixtures add one delivered and one pending order. Expanded shops
 include four active shops, one pending approval and one disabled shop. Some
 listings are intentionally out of stock or discontinued. Categories cover
 electronics, home, books, apparel, sports, beauty, groceries and toys.
+
+The category tree is populated by the extended seed:
+
+```text
+Demo Catalog
+├── Demo Technology
+│   └── Demo Electronics
+├── Demo Everyday
+│   ├── Demo Home
+│   ├── Demo Apparel
+│   ├── Demo Beauty
+│   └── Demo Groceries
+└── Demo Leisure
+    ├── Demo Books
+    ├── Demo Sports
+    └── Demo Toys
+```
+
+Products remain attached to the eight leaf categories. Filtering by a department
+or `Demo Catalog` includes products from its descendants. Rerunning `db:seed` also
+adds this tree to an older flat demo dataset without changing category IDs or
+product assignments. Existing non-null parent assignments are preserved.
 
 Prices are fictional demo amounts in the application's existing display currency.
 Stock is the remaining inventory after historical allocations/refunds; expanded

@@ -126,6 +126,7 @@ export default function CheckoutPage() {
                 ? "Placing your order..."
                 : "Place order (cash on delivery)"}
             </button>
+            <p className="required-note">*required</p>
           </form>
         </>
       )}

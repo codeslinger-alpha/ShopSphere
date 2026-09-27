@@ -42,7 +42,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
     return (
       <div className="attribute-row">
         <label>
-          {attribute.name} {isRequired ? "(category required)" : ""}
+          <span>{attribute.name} {isRequired && <span className="required-tag" aria-hidden="true">*</span>}</span>
           <small>{attribute.description}</small>
           <input
             name={`attribute:${attribute.attribute_id}`}
@@ -63,7 +63,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
       </h2>
       <fieldset disabled={busy}>
         <label>
-          Name
+          <span>Name <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="name"
             defaultValue={product.name || ""}
@@ -72,7 +72,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
           />
         </label>
         <label>
-          Manufacturer
+          <span>Manufacturer <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="manufacturer"
             defaultValue={product.manufacturer || ""}
@@ -91,7 +91,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
         </label>
         <MarkdownField value={product.description} />
         <label>
-          Category
+          <span>Category <span className="required-tag" aria-hidden="true">*</span></span>
           <select
             name="category_id"
             value={category}
@@ -107,7 +107,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
           </select>
         </label>
         <label>
-          Wholesale price
+          <span>Wholesale price <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="wholesale_price"
             type="number"
@@ -143,7 +143,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
         {additional.map((attribute, index) => (
           <div className="attribute-row" key={index}>
             <label>
-              Name
+              <span>Name <span className="required-tag" aria-hidden="true">*</span></span>
               <input
                 value={attribute.name}
                 maxLength="100"
@@ -158,7 +158,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
               />
             </label>
             <label>
-              Value
+              <span>Value <span className="required-tag" aria-hidden="true">*</span></span>
               <input
                 value={attribute.value}
                 maxLength="500"
@@ -194,6 +194,7 @@ function MasterEditor({ product, metadata, busy, onSave }) {
         </button>
         <button className="primary">Save master product</button>
       </fieldset>
+      <p className="required-note">*required</p>
     </form>
   );
 }
@@ -218,7 +219,7 @@ function CategoryEditor({ category, metadata, busy, onSave }) {
       <h2>{category.category_id ? "Edit category" : "New category"}</h2>
       <fieldset disabled={busy}>
         <label>
-          Category name
+          <span>Category name <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="name"
             defaultValue={category.name || ""}
@@ -282,6 +283,7 @@ function CategoryEditor({ category, metadata, busy, onSave }) {
         ))}
         <button className="primary">Save category</button>
       </fieldset>
+      <p className="required-note">*required</p>
     </form>
   );
 }
@@ -405,7 +407,7 @@ export default function AdminCatalogPage() {
                 >
                   <h2>Define an attribute</h2>
                   <label>
-                    Attribute name
+                    <span>Attribute name <span className="required-tag" aria-hidden="true">*</span></span>
                     <input name="name" maxLength="100" required />
                   </label>
                   <label>
@@ -415,6 +417,7 @@ export default function AdminCatalogPage() {
                   <button className="primary" disabled={task.busy}>
                     Create attribute
                   </button>
+                  <p className="required-note">*required</p>
                 </form>
                 <h2>Categories</h2>
                 <button

@@ -20,7 +20,7 @@ function ShopEditor({ shop, onSave, busy }) {
       <h2>{shop.shop_id ? "Edit shop" : "Create shop"}</h2>
       <fieldset disabled={busy}>
         <label>
-          Shop name
+          <span>Shop name <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="name"
             defaultValue={shop.name || ""}
@@ -29,7 +29,7 @@ function ShopEditor({ shop, onSave, busy }) {
           />
         </label>
         <label>
-          Shop phone
+          <span>Shop phone <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="phone_numbers"
             type="tel"
@@ -72,6 +72,7 @@ function ShopEditor({ shop, onSave, busy }) {
         </p>
         <button className="primary">Save shop</button>
       </fieldset>
+      <p className="required-note">*required</p>
     </form>
   );
 }
@@ -89,7 +90,7 @@ function ListingEditor({ listing, onSave, busy }) {
       <p>Stock: {listing.in_stock}. Buy more units to restock.</p>
       <fieldset disabled={busy}>
         <label>
-          Retail price
+          <span>Retail price <span className="required-tag" aria-hidden="true">*</span></span>
           <input
             name="unit_price"
             type="number"
@@ -113,6 +114,7 @@ function ListingEditor({ listing, onSave, busy }) {
         </label>
         <button className="primary">Save listing</button>
       </fieldset>
+      <p className="required-note">*required</p>
     </form>
   );
 }
@@ -657,7 +659,7 @@ export default function VendorPage({ page }) {
               </p>
               <fieldset disabled={task.busy || !product || !activeShops.length}>
                 <label>
-                  Shop
+                  <span>Shop <span className="required-tag" aria-hidden="true">*</span></span>
                   <select name="shop_id" required>
                     <option value="">Choose your shop</option>
                     {activeShops.map((s) => (
@@ -668,7 +670,7 @@ export default function VendorPage({ page }) {
                   </select>
                 </label>
                 <label>
-                  Master product
+                  <span>Master product <span className="required-tag" aria-hidden="true">*</span></span>
                   <select
                     name="master_prod_id"
                     value={product?.master_prod_id || ""}
@@ -683,7 +685,7 @@ export default function VendorPage({ page }) {
                   </select>
                 </label>
                 <label>
-                  Purchase quantity
+                  <span>Purchase quantity <span className="required-tag" aria-hidden="true">*</span></span>
                   <input
                     name="quantity"
                     type="number"
@@ -693,7 +695,7 @@ export default function VendorPage({ page }) {
                   />
                 </label>
                 <label>
-                  Your retail price
+                  <span>Your retail price <span className="required-tag" aria-hidden="true">*</span></span>
                   <input
                     name="unit_price"
                     type="number"
@@ -710,6 +712,7 @@ export default function VendorPage({ page }) {
               {masters.data?.length === 0 && (
                 <p>No available master products.</p>
               )}
+              <p className="required-note">*required</p>
             </form>
             {product && <MasterFacts product={product} />}
           </div>

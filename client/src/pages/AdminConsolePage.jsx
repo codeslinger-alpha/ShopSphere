@@ -884,15 +884,15 @@ export default function AdminConsolePage() {
                   </select>
                 </label>
                 <label>
-                  Name
+                  <span>Name <span className="required-tag" aria-hidden="true">*</span></span>
                   <input name="name" minLength="2" maxLength="100" required />
                 </label>
                 <label>
-                  Email
+                  <span>Email <span className="required-tag" aria-hidden="true">*</span></span>
                   <input name="email" type="email" maxLength="60" required />
                 </label>
                 <label>
-                  Password
+                  <span>Password <span className="required-tag" aria-hidden="true">*</span></span>
                   <input
                     name="password"
                     type="password"
@@ -902,7 +902,7 @@ export default function AdminConsolePage() {
                   />
                 </label>
                 <label>
-                  Confirm password
+                  <span>Confirm password <span className="required-tag" aria-hidden="true">*</span></span>
                   <input
                     name="confirm_password"
                     type="password"
@@ -914,6 +914,7 @@ export default function AdminConsolePage() {
                 <ContactFields delivery={createRole === "delivery"} />
                 <button className="primary">Create account</button>
               </fieldset>
+              <p className="required-note">*required</p>
             </form>
           )}
           <UsersPanel

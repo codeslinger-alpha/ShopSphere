@@ -26,10 +26,11 @@ export default function CartQuantityForm({ item, disabled, onUpdate }) {
   return (
     <form className="quantity-form" onSubmit={handleSubmit} noValidate>
       <label>
-        Quantity
+        <span>Quantity <span className="required-tag" aria-hidden="true">*</span></span>
         <input
           aria-label={`Quantity for ${item.name}`}
           type="number"
+          required
           min="1"
           max={item.in_stock}
           step="1"
@@ -52,6 +53,7 @@ export default function CartQuantityForm({ item, disabled, onUpdate }) {
           {error}
         </p>
       )}
+      <p className="required-note">*required</p>
     </form>
   );
 }

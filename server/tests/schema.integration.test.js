@@ -19,6 +19,8 @@ test("canonical schema and expanded seed are complete and repeatable", async () 
     await scratch.load(client, { extended: true });
     const snapshot = async () => (await client.query(`
       SELECT (SELECT COUNT(*) FROM users) AS users,
+        (SELECT COUNT(*) FROM categories) AS categories,
+        (SELECT COUNT(*) FROM categories WHERE parent_category IS NULL) AS roots,
         (SELECT COUNT(*) FROM shops) AS shops,
         (SELECT COUNT(*) FROM master_products) AS masters,
         (SELECT COUNT(*) FROM products) AS listings,
@@ -33,6 +35,20 @@ test("canonical schema and expanded seed are complete and repeatable", async () 
     `)).rows[0];
     const before = await snapshot();
     assert.equal(before.users, 46);
+    assert.equal(before.categories, 12);
+    assert.equal(before.roots, 1);
+    const tree = (await client.query(`SELECT category_id, LEVEL AS depth
+      FROM categories START WITH name='Demo Catalog'
+      CONNECT BY PRIOR category_id=parent_category`)).rows;
+    assert.equal(tree.length, 12);
+    assert.equal(Math.max(...tree.map((row) => row.depth)), 3);
+    const { buildProductListQuery } = require("../src/db/queries/catalogQueries");
+    const filters = { q: "", categoryId: tree.find((row) => row.depth === 1).category_id,
+      minPrice: null, maxPrice: null, attributes: new Map(), sort: "newest", page: 1, limit: 60 };
+    const descendants = await client.query(buildProductListQuery(filters));
+    const all = await client.query(buildProductListQuery({ ...filters, categoryId: null }));
+    assert.ok(descendants.rows.length > 0);
+    assert.deepEqual(descendants.rows, all.rows);
     assert.equal(before.shops, 8);
     assert.equal(before.masters, 52);
     assert.equal(before.listings, 296);

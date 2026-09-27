@@ -22,7 +22,7 @@ export function AddressFields({ value = {} }) {
   return (
     <>
       <label>
-        Street address
+        <span>Street address <span className="required-tag" aria-hidden="true">*</span></span>
         <input
           name="street_address"
           maxLength="500"
@@ -31,7 +31,7 @@ export function AddressFields({ value = {} }) {
         />
       </label>
       <label>
-        City
+        <span>City <span className="required-tag" aria-hidden="true">*</span></span>
         <input
           name="city"
           maxLength="100"
@@ -56,7 +56,7 @@ export function AddressFields({ value = {} }) {
         />
       </label>
       <label>
-        Country
+        <span>Country <span className="required-tag" aria-hidden="true">*</span></span>
         {countries ? (
           <select
             name="country_id"
@@ -81,7 +81,7 @@ export function ContactFields({ value = {}, delivery = false }) {
   return (
     <>
       <label>
-        Phone
+        <span>Phone <span className="required-tag" aria-hidden="true">*</span></span>
         <input
           name="phone"
           type="tel"
@@ -102,7 +102,7 @@ export function ContactFields({ value = {}, delivery = false }) {
       <AddressFields value={value} />
       {delivery && (
         <label>
-          Vehicle information
+          <span>Vehicle information <span className="required-tag" aria-hidden="true">*</span></span>
           <textarea
             name="vehicle_info"
             maxLength="500"

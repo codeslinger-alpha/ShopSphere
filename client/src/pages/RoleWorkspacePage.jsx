@@ -59,7 +59,7 @@ export default function RoleWorkspacePage() {
           {/* Only the free-text notes are required. A courier on a bicycle has
               no plate or licence to give, and the server accepts that. */}
           <label>
-            Vehicle information
+            <span>Vehicle information <span className="required-tag" aria-hidden="true">*</span></span>
             <textarea
               name="vehicle_info"
               defaultValue={resource.data.vehicle_info || ""}
@@ -108,6 +108,7 @@ export default function RoleWorkspacePage() {
           <button className="primary" disabled={task.busy}>
             Save availability
           </button>
+          <p className="required-note">*required</p>
         </form>
       )}
     </main>

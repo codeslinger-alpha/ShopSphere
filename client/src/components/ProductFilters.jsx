@@ -17,21 +17,21 @@ function flattenCategoryTree(categories) {
 
   const rows = [];
   const seen = new Set();
-  function visit(parent, depth) {
+  function visit(parent, ancestors) {
     for (const category of children.get(parent) ?? []) {
       if (seen.has(category.category_id)) continue;
       seen.add(category.category_id);
-      rows.push({ ...category, depth });
-      visit(category.category_id, depth + 1);
+      rows.push({ ...category, depth: ancestors.length, ancestors });
+      visit(category.category_id, [...ancestors, category.category_id]);
     }
   }
-  visit(null, 0);
+  visit(null, []);
   // Categories whose parent is missing from the list stay reachable at the top.
   for (const category of categories) {
     if (seen.has(category.category_id)) continue;
     seen.add(category.category_id);
-    rows.push({ ...category, depth: 0 });
-    visit(category.category_id, 1);
+    rows.push({ ...category, depth: 0, ancestors: [] });
+    visit(category.category_id, [category.category_id]);
   }
   return rows;
 }
@@ -72,6 +72,7 @@ export default function ProductFilters({
   onChange,
   onClear,
 }) {
+  const [expanded, setExpanded] = useState(new Set());
   const [search, setSearch] = useState(searchTerm);
   const [price, setPrice] = useState({ min: minPrice, max: maxPrice });
 
@@ -88,6 +89,7 @@ export default function ProductFilters({
   }, [search, searchTerm]);
 
   const categoryRows = flattenCategoryTree(categories ?? []);
+  const parents = new Set((categories ?? []).map((category) => category.parent_category));
   const facetGroups = groupFacets(facets);
   const hasFilters = Boolean(
     searchTerm || selectedCategory || selectedAttributes.length || minPrice || maxPrice,
@@ -116,21 +118,34 @@ export default function ProductFilters({
         <div className="filter-group">
           <h2>Categories</h2>
           <ul className="filter-options">
-            {categoryRows.map((category) => (
-              <li key={category.category_id}>
+            {categoryRows.filter((category) => category.ancestors.every((id) => expanded.has(id))).map((category) => (
+              <li key={category.category_id} className="category-row"
+                style={{ paddingLeft: `${category.depth * 0.9}rem` }}>
+                {parents.has(category.category_id) ? (
+                  <button type="button" className="category-toggle"
+                    aria-label={`${expanded.has(category.category_id) ? "Collapse" : "Expand"} ${category.name}`}
+                    aria-expanded={expanded.has(category.category_id)}
+                    onClick={() => setExpanded((current) => {
+                      const next = new Set(current);
+                      if (next.has(category.category_id)) next.delete(category.category_id);
+                      else next.add(category.category_id);
+                      return next;
+                    })}>
+                    <span aria-hidden="true">{expanded.has(category.category_id) ? "▾" : "▸"}</span>
+                  </button>
+                ) : <span className="category-toggle-spacer" /> }
                 <button
                   type="button"
-                  style={{ paddingLeft: `${0.6 + category.depth * 0.9}rem` }}
                   className={
-                    category.category_id === selectedCategory
+                    String(category.category_id) === String(selectedCategory)
                       ? "filter-option active"
                       : "filter-option"
                   }
-                  aria-pressed={category.category_id === selectedCategory}
+                  aria-pressed={String(category.category_id) === String(selectedCategory)}
                   onClick={() =>
                     onChange({
                       category_id:
-                        category.category_id === selectedCategory
+                        String(category.category_id) === String(selectedCategory)
                           ? ""
                           : category.category_id,
                     })

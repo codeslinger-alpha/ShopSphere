@@ -223,7 +223,7 @@ function OrderReturns({ order }) {
         (open ? (
           <form className="form" onSubmit={send}>
             <label>
-              Item
+              <span>Item <span className="required-tag" aria-hidden="true">*</span></span>
               <select name="prod_id" required>
                 {order.items
                   .filter((item) => !withOpenReturn.has(item.prod_id))
@@ -235,7 +235,7 @@ function OrderReturns({ order }) {
               </select>
             </label>
             <label>
-              How many units
+              <span>How many units <span className="required-tag" aria-hidden="true">*</span></span>
               <input
                 name="quantity"
                 type="number"
@@ -245,7 +245,7 @@ function OrderReturns({ order }) {
               />
             </label>
             <label>
-              Why
+              <span>Why <span className="required-tag" aria-hidden="true">*</span></span>
               <textarea
                 name="reason"
                 rows="3"
@@ -260,6 +260,7 @@ function OrderReturns({ order }) {
             <button type="button" onClick={() => setOpen(false)}>
               Never mind
             </button>
+            <p className="required-note">*required</p>
           </form>
         ) : (
           <button onClick={() => setOpen(true)}>Return an item</button>

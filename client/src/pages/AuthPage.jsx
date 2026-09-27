@@ -29,7 +29,7 @@ export default function AuthPage() {
         <h1>Welcome back</h1>
         <fieldset disabled={busy}>
           <label>
-            Email
+            <span>Email <span className="required-tag" aria-hidden="true">*</span></span>
             <input
               name="email"
               type="email"
@@ -39,7 +39,7 @@ export default function AuthPage() {
             />
           </label>
           <label>
-            Password
+            <span>Password <span className="required-tag" aria-hidden="true">*</span></span>
             <input
               name="password"
               type="password"
@@ -59,6 +59,7 @@ export default function AuthPage() {
         <Link className="link-button" to="/register">
           Need an account? Sign up
         </Link>
+        <p className="required-note">*required</p>
       </form>
     </main>
   );
