@@ -1,52 +1,30 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
 const pool = require("../src/db/pool");
+const scratch = require("./scratch-schema");
 const { createAuthToken } = require("../src/utils/authToken");
 
 // The administrator's side of the platform: who may be banned, which shops go
 // live, and above all that a vendor cannot do either to themselves. Every check
 // runs inside a savepoint that is rolled back, so each one sees the same seeded
 // starting point.
-test("admin moderation and shop approval against PostgreSQL", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
+test("admin moderation and shop approval against Oracle", async (t) => {
   let client;
   let server;
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  let namespace;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_admin_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
-    // All API reads/writes in this test use this isolated transaction.
-    pool.query = (...args) => client.query(...args);
-    // Nested API transactions need real rollback semantics within the test schema.
-    let transactionId = 0;
-    pool.connect = async () => {
-      const savepoint = `admin_tx_${++transactionId}`;
-      return {
-        query: async (text, values) => {
-          if (text === "BEGIN") return client.query(`SAVEPOINT ${savepoint}`);
-          if (text === "COMMIT") return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          if (text === "ROLLBACK") {
-            await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          }
-          return client.query(text, values);
-        },
-        release: () => {},
-      };
-    };
+    namespace = await scratch.create(client, "SHOPSPHERE_ADMIN");
+    await scratch.load(client);
+    // All API reads/writes in this test use this isolated transaction, and
+    // nested API transactions become savepoints within it.
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -62,7 +40,7 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
     const courier = account("delivery@shopsphere.test");
     const countryId = (
       await client.query(
-        "SELECT country_id FROM countries ORDER BY country_id LIMIT 1",
+        "SELECT country_id FROM countries ORDER BY country_id FETCH FIRST 1 ROW ONLY",
       )
     ).rows[0].country_id;
     const techCorner = (
@@ -70,7 +48,7 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
     ).rows[0];
     const masterId = (
       await client.query(
-        "SELECT master_prod_id FROM master_products WHERE active_status = 'available' ORDER BY master_prod_id LIMIT 1",
+        "SELECT master_prod_id FROM master_products WHERE active_status = 'available' ORDER BY master_prod_id FETCH FIRST 1 ROW ONLY",
       )
     ).rows[0].master_prod_id;
 
@@ -113,14 +91,14 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
     }
 
     const shopRow = async (shopId) =>
-      (await client.query("SELECT * FROM shops WHERE shop_id = $1", [shopId]))
+      (await client.query("SELECT * FROM shops WHERE shop_id = :1", [shopId]))
         .rows[0];
     const userRow = async (userId) =>
-      (await client.query("SELECT * FROM users WHERE user_id = $1", [userId]))
+      (await client.query("SELECT * FROM users WHERE user_id = :1", [userId]))
         .rows[0];
     const shopListings = async (shopId) =>
       (
-        await client.query("SELECT * FROM products WHERE shop_id = $1", [
+        await client.query("SELECT * FROM products WHERE shop_id = :1", [
           shopId,
         ])
       ).rows;
@@ -171,8 +149,8 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
       const created = await register("/api/auth/register");
       assert.equal(created.status, 201, created.data.message);
       assert.match(created.headers.get("set-cookie"), /shopsphere_token=.*HttpOnly/);
-      assert.equal((await client.query("SELECT vehicle_info FROM delivery_personnel WHERE delivery_person_id=$1", [created.data.user.user_id])).rows[0].vehicle_info, "Bicycle");
-      const locationCount = async () => (await client.query("SELECT count(*)::int AS n FROM locations")).rows[0].n;
+      assert.equal((await client.query("SELECT vehicle_info FROM delivery_personnel WHERE delivery_person_id=:1", [created.data.user.user_id])).rows[0].vehicle_info, "Bicycle");
+      const locationCount = async () => (await client.query("SELECT COUNT(*) AS n FROM locations")).rows[0].n;
       const before = await locationCount();
       assert.equal((await register("/api/auth/register")).status, 409);
       assert.equal(await locationCount(), before, "duplicate registration must roll back its address");
@@ -294,7 +272,7 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
         );
         assert.equal(await storefrontTotal(), before);
         const listing = (
-          await client.query("SELECT * FROM products WHERE prod_id = $1", [
+          await client.query("SELECT * FROM products WHERE prod_id = :1", [
             purchase.data.listing.prod_id,
           ])
         ).rows[0];
@@ -473,10 +451,11 @@ test("admin moderation and shop approval against PostgreSQL", async (t) => {
     );
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

@@ -1,7 +1,8 @@
 node_modules/
 .env
 .env.*
-!.env.example
+!.env.example*
+
 client/dist/
 client/test-results/
 client/playwright-report/

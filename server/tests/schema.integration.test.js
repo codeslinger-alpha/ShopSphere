@@ -1,36 +1,35 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const path = require("node:path");
 require("dotenv").config({ quiet: true });
 const pool = require("../src/db/pool");
+const scratch = require("./scratch-schema");
 
 test("canonical schema and expanded seed are complete and repeatable", async () => {
   const client = await pool.connect();
+  let namespace;
   try {
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout='30s'");
-    const namespace = `shopsphere_schema_${process.pid}_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    const schema = await fs.readFile("sql/schema.sql", "utf8");
-    assert.doesNotMatch(schema, /^\s*(ALTER TABLE|DROP TRIGGER|UPDATE users)/im);
-    await client.query(schema);
-    const seed = (await Promise.all(["seed_demo.sql", "seed_extended.sql"].map((name) =>
-      fs.readFile(`sql/test_insert/${name}`, "utf8")))).join("\n");
-    await client.query(seed);
-    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+    namespace = await scratch.create(client, "SHOPSPHERE_SCHEMA");
+    const canonical = await fs.readFile(
+      path.join(__dirname, "../sql/schema.sql"),
+      "utf8",
+    );
+    assert.doesNotMatch(canonical, /^\s*(ALTER TABLE|DROP TRIGGER|UPDATE users)/im);
+    await scratch.load(client, { extended: true });
     const snapshot = async () => (await client.query(`
-      SELECT (SELECT count(*)::int FROM users) AS users,
-        (SELECT count(*)::int FROM shops) AS shops,
-        (SELECT count(*)::int FROM master_products) AS masters,
-        (SELECT count(*)::int FROM products) AS listings,
-        (SELECT count(*)::int FROM orders) AS orders,
-        (SELECT count(*)::int FROM order_items) AS items,
-        (SELECT count(*)::int FROM payments) AS payments,
-        (SELECT count(*)::int FROM vendor_refunds) AS refunds,
-        (SELECT sum(earnings)::text FROM delivery_personnel) AS courier_earnings,
-        (SELECT sum(balance)::text FROM shops) AS shop_balances,
-        (SELECT sum(amount)::text FROM shop_topups) AS topups
+      SELECT (SELECT COUNT(*) FROM users) AS users,
+        (SELECT COUNT(*) FROM shops) AS shops,
+        (SELECT COUNT(*) FROM master_products) AS masters,
+        (SELECT COUNT(*) FROM products) AS listings,
+        (SELECT COUNT(*) FROM orders) AS orders,
+        (SELECT COUNT(*) FROM order_items) AS items,
+        (SELECT COUNT(*) FROM payments) AS payments,
+        (SELECT COUNT(*) FROM vendor_refunds) AS refunds,
+        (SELECT SUM(earnings) FROM delivery_personnel) AS courier_earnings,
+        (SELECT SUM(balance) FROM shops) AS shop_balances,
+        (SELECT SUM(amount) FROM shop_topups) AS topups
+      FROM dual
     `)).rows[0];
     const before = await snapshot();
     assert.equal(before.users, 46);
@@ -42,10 +41,13 @@ test("canonical schema and expanded seed are complete and repeatable", async () 
     assert.equal(before.payments, 34);
     assert.equal(before.refunds, 24);
     assert.equal((await client.query("SELECT 1 FROM orders WHERE total_amount<>fn_order_subtotal(order_id)")).rowCount, 0);
-    assert.equal((await client.query("SELECT 1 FROM payments p JOIN orders o USING(order_id) WHERE p.amount<>o.total_amount+o.delivery_cost")).rowCount, 0);
-    assert.equal((await client.query("SELECT 1 FROM orders o JOIN payments p USING(order_id) WHERE o.order_status='cancelled' AND (p.payment_status<>'failed' OR p.paid_at IS NOT NULL OR o.delivery_person_id IS NOT NULL)")).rowCount, 0);
-    for (const name of ['idx_vendor_refunds_shop', 'idx_vendor_refunds_created'])
-      assert.equal((await client.query("SELECT 1 FROM pg_indexes WHERE schemaname=$1 AND indexname=$2", [namespace, name])).rowCount, 1);
+    assert.equal((await client.query("SELECT 1 FROM payments p JOIN orders o ON o.order_id=p.order_id WHERE p.amount<>o.total_amount+o.delivery_cost")).rowCount, 0);
+    assert.equal((await client.query("SELECT 1 FROM orders o JOIN payments p ON p.order_id=o.order_id WHERE o.order_status='cancelled' AND (p.payment_status<>'failed' OR p.paid_at IS NOT NULL OR o.delivery_person_id IS NOT NULL)")).rowCount, 0);
+    // Named the way Oracle spells an index and read from the owner-scoped view:
+    // USER_INDEXES answers for the user the connection logged in as, which is not
+    // the schema this run built.
+    for (const name of ['IDX_VENDOR_REFUNDS_SHOP', 'IDX_VENDOR_REFUNDS_CREATED'])
+      assert.equal((await client.query("SELECT 1 FROM all_indexes WHERE owner=SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AND index_name=:1", [name])).rowCount, 1);
     // The balance is a cached running total, so it has to equal the movements it
     // claims to summarise — every shop, or the column is a number that reconciles
     // with nothing. This is the identity the recharge page and the purchase guard
@@ -57,7 +59,7 @@ test("canonical schema and expanded seed are complete and repeatable", async () 
           SELECT 1 FROM shops s
           WHERE s.balance <> COALESCE((
             SELECT SUM(oi.quantity * oi.unit_price)
-            FROM order_items oi JOIN orders o USING(order_id) JOIN products p USING(prod_id)
+            FROM order_items oi JOIN orders o ON o.order_id=oi.order_id JOIN products p ON p.prod_id=oi.prod_id
             WHERE p.shop_id = s.shop_id AND o.order_status = 'delivered'), 0)
             + COALESCE((SELECT SUM(t.amount) FROM shop_topups t WHERE t.shop_id = s.shop_id), 0)
             - COALESCE((SELECT SUM(sp.quantity * sp.wholesale_unit_price)
@@ -67,16 +69,21 @@ test("canonical schema and expanded seed are complete and repeatable", async () 
       ).rowCount,
       0,
     );
-    const routine = (await client.query("SELECT prokind FROM pg_proc WHERE pronamespace=$1::regnamespace AND proname='settle_delivery'", [namespace])).rows[0];
-    assert.equal(routine.prokind, 'p');
+    // The procedure the delivery API calls, asserted to be a procedure rather
+    // than the function of the same shape it could have been written as.
+    const routine = (await client.query(
+      `SELECT object_type FROM all_objects
+       WHERE owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AND object_name = 'SETTLE_DELIVERY'`,
+    )).rows[0];
+    assert.equal(routine.object_type, 'PROCEDURE');
     // Reseeding must not reset actual earnings accrued after the fixtures were loaded.
     await client.query("UPDATE delivery_personnel SET earnings=earnings+10");
     const changed = await snapshot();
-    await client.query(seed);
+    await scratch.seed(client);
     assert.deepEqual(await snapshot(), changed);
   } finally {
-    await client.query("ROLLBACK");
-    client.release();
+    await scratch.drop(client, namespace);
+    await client.close();
     await pool.end();
   }
 });

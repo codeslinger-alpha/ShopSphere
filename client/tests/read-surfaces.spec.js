@@ -303,6 +303,13 @@ async function mockApi(
         if (path === "/api/delivery/returns") {
             return route.fulfill({ json: courierReturnRows });
         }
+        // The courier page also carries the open board and the courier's own run.
+        // Both are empty here: these tests are about the pickups, and the board's
+        // accept flow has its own test in checkout.spec.js. Answering them keeps
+        // the page from rendering "route not found" where a real page has content.
+        if (path === "/api/delivery/open-orders" || path === "/api/delivery/deliveries") {
+            return route.fulfill({ json: [] });
+        }
         if (path === "/api/orders/7") return route.fulfill({ json: order });
         if (/^\/api\/shops\/\d+\/reviews$/.test(path)) {
             return route.fulfill({ json: shopReviewRows });

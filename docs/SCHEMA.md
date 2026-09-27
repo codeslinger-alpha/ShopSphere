@@ -553,7 +553,7 @@ Refer to the SQL file for exact CHECK expressions, identity generation and defau
 
 - Hard deletion is blocked for users, shops, master_products, products, delivery_personnel and orders; status fields preserve history.
 - Removing a role disables affected users. Disabling a user disables their shops and makes their delivery profile unavailable.
-- Disabling a shop discontinues listings. An unavailable courier releases pending/shipped assignments.
+- Disabling a shop discontinues listings. An unavailable courier releases pending/shipped assignments, and those orders return to `delivery_person_id IS NULL` and `pending` — that is, to the open board any on-duty courier can take them from.
 - Cancelling a pending order restores stock once, detaches its courier and marks pending payments failed; line items remain.
 - Order status transitions are restricted; line-item changes recalculate both old and new order totals when moved.
 - Product reviews require a delivered order for that exact customer/listing, and shop reviews require a delivered order for any listing from that shop, on both INSERT and UPDATE.

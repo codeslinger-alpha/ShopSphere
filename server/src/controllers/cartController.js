@@ -27,11 +27,12 @@ async function addCartItem(req, res) {
       .json({ message: "Product ID and quantity must be positive integers." });
   }
 
-  const result = await transaction.query(ADD_CART_ITEM, [
-    req.user.user_id,
-    productId,
-    quantity,
-  ]);
+  // The insert-or-top-up is PL/SQL: Oracle cannot express it as one statement
+  // that also reports what it wrote, so the statement carries its own binds.
+  const result = await transaction.query(
+    ADD_CART_ITEM.text,
+    ADD_CART_ITEM.binds(req.user.user_id, productId, quantity),
+  );
 
   if (result.rows.length === 0) {
     const product = await pool.query(PRODUCT_EXISTS, [productId]);
@@ -59,11 +60,23 @@ async function updateCartItem(req, res) {
       .json({ message: "Product ID and quantity must be positive integers." });
   }
 
-  const result = await transaction.query(UPDATE_CART_ITEM, [
-    quantity,
-    req.user.user_id,
-    productId,
-  ]);
+  // Two statements in one transaction, because Oracle will not return the row's
+  // expressions from the UPDATE that changed it. The first is still the whole of
+  // the guard — availability, stock and the caller's own cart row are all in its
+  // predicate — so a row coming back means the write happened, and the read that
+  // follows is reporting it rather than deciding anything.
+  const result = await transaction(async (client) => {
+    const updated = await client.query(UPDATE_CART_ITEM, [
+      quantity,
+      req.user.user_id,
+      productId,
+    ]);
+    if (!updated.rows.length) return updated;
+    return client.query(GET_CART_ITEM_BY_PRODUCT_ID, [
+      req.user.user_id,
+      productId,
+    ]);
+  });
 
   if (result.rows.length === 0) {
     const cartItem = await pool.query(GET_CART_ITEM_BY_PRODUCT_ID, [

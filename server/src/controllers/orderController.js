@@ -42,7 +42,11 @@ async function resolveShippingAddress(client, userId, body) {
 async function placeOrder(req, res) {
   const userId = req.user.user_id;
   const order = await transaction(async (client) => {
-    const cart = (await client.query(q.CART_FOR_ORDER, [userId])).rows;
+    // Oracle can restart a SELECT FOR UPDATE after waiting for another checkout.
+    // Fix the requested product IDs first so that restart cannot buy items added
+    // while the request was waiting or re-read an already purchased cart.
+    const ids = (await client.query(q.CART_PRODUCT_IDS, [userId])).rows.map((row) => row.prod_id);
+    const cart = (await client.query(q.CART_FOR_ORDER, [userId, ids])).rows;
     if (cart.length === 0)
       v.fail(400, "Your cart is empty. Add something to it before checking out.");
 
@@ -62,16 +66,13 @@ async function placeOrder(req, res) {
     }
 
     const shippingAddress = await resolveShippingAddress(client, userId, req.body || {});
-    // Nobody available is a legitimate outcome, not a failure: the order waits
-    // unassigned, exactly as the seeded pending order does.
-    const courier = (await client.query(q.FIND_AVAILABLE_COURIER)).rows[0];
-
+    // No courier is chosen here. The order is placed unassigned and appears on
+    // the open board, where an on-duty courier takes it. Picking one at this
+    // moment is what used to strand an order: whoever checkout found was the
+    // only person who could ever see it, and if it found nobody the order was
+    // invisible to all of them.
     const created = (
-      await client.query(q.CREATE_ORDER, [
-        userId,
-        shippingAddress,
-        courier ? courier.delivery_person_id : null,
-      ])
+      await client.query(q.CREATE_ORDER, [userId, shippingAddress])
     ).rows[0];
 
     for (const item of cart) {
@@ -187,6 +188,49 @@ async function listDeliveries(req, res) {
   return res.json(orders);
 }
 
+// The parcels nobody has taken yet. Scoped by the query to orders that are
+// unassigned and pending, and to the caller being an on-duty courier.
+async function listOpenOrders(req, res) {
+  const orders = (await pool.query(q.LIST_OPEN_ORDERS, [req.user.user_id])).rows;
+
+  // Payment is the cash to collect and the items are what is being carried, so
+  // both come back with the board for the same reason they do on the run: a
+  // courier deciding whether to take a trip needs to see what it is.
+  if (orders.length) {
+    const items = (
+      await pool.query(q.GET_ITEMS_FOR_ORDERS, [
+        orders.map((order) => order.order_id),
+      ])
+    ).rows;
+    for (const order of orders)
+      order.items = items.filter((item) => item.order_id === order.order_id);
+  }
+
+  return res.json(orders);
+}
+
+// Taking an order off the board. The claim itself is one guarded UPDATE: the
+// status the transition starts from and the caller's own availability are both
+// in its predicate, so two couriers racing cannot both win and an off-duty one
+// cannot take work. rowCount 0 is the single answer for every way that can fail,
+// and 409 is the honest one — the likeliest cause by far is another courier
+// having tapped first, and saying "somebody else has this" is more useful than
+// a sentence about which predicate failed.
+async function claimOrder(req, res) {
+  const orderId = v.id(req.params.orderId, "Order");
+  const claimed = (
+    await transaction.query(q.CLAIM_ORDER, [orderId, req.user.user_id])
+  ).rows[0];
+
+  if (!claimed)
+    v.fail(409, "That order is no longer available to take.");
+
+  return res.json({
+    message: `Order #${claimed.order_id} is yours. Collect the parcel and mark it shipped.`,
+    order: claimed,
+  });
+}
+
 async function advanceDelivery(req, res) {
   const orderId = v.id(req.params.orderId, "Order");
   const target = req.body?.order_status;
@@ -194,10 +238,24 @@ async function advanceDelivery(req, res) {
     v.fail(400, "An order can be marked shipped or delivered.");
 
   const order = await transaction(async (client) => {
-    const advanced = target === "delivered"
-      ? (await client.query(q.SETTLE_DELIVERY, [orderId, req.user.user_id]))
-          .rows[0].result
-      : (await client.query(q.SHIP_ORDER, [orderId, req.user.user_id])).rows[0];
+    // settle_delivery is reached as PL/SQL and answers with a CLOB of JSON. A
+    // procedure has no return value and a bind has no type a driver could read
+    // as an object, so the text is parsed here, in the one place that asked for
+    // it. Everything else about the call is unchanged: rowCount 0 still means
+    // the guard did not match, and still becomes the 409 below.
+    const settled =
+      target === "delivered"
+        ? (
+            await client.query(
+              q.SETTLE_DELIVERY.text,
+              q.SETTLE_DELIVERY.binds(orderId, req.user.user_id),
+            )
+          ).rows[0]
+        : null;
+    const advanced =
+      target === "delivered"
+        ? settled && JSON.parse(settled.result)
+        : (await client.query(q.SHIP_ORDER, [orderId, req.user.user_id])).rows[0];
 
     if (!advanced) {
       const assigned = (
@@ -226,4 +284,13 @@ async function advanceDelivery(req, res) {
   });
 }
 
-module.exports = { advanceDelivery, cancelOrder, getOrder, listDeliveries, listOrders, placeOrder };
+module.exports = {
+  advanceDelivery,
+  cancelOrder,
+  claimOrder,
+  getOrder,
+  listDeliveries,
+  listOpenOrders,
+  listOrders,
+  placeOrder,
+};

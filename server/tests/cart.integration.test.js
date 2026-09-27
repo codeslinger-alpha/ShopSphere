@@ -1,47 +1,25 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
 const pool = require("../src/db/pool");
+const scratch = require("./scratch-schema");
 const { createAuthToken } = require("../src/utils/authToken");
 
-test("cart, catalog and session regressions against PostgreSQL", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
+test("cart, catalog and session regressions against Oracle", async (t) => {
   let client;
   let server;
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  let namespace;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_cart_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
+    namespace = await scratch.create(client, "SHOPSPHERE_CART");
+    await scratch.load(client);
     // All API reads/writes in this test use this isolated transaction.
-    pool.query = (...args) => client.query(...args);
-    let transactionId = 0;
-    pool.connect = async () => {
-      const savepoint = `cart_tx_${++transactionId}`;
-      return {
-        query: async (text, values) => {
-          if (text === "BEGIN") return client.query(`SAVEPOINT ${savepoint}`);
-          if (text === "COMMIT") return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          if (text === "ROLLBACK") {
-            await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          }
-          return client.query(text, values);
-        },
-        release: () => {},
-      };
-    };
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -59,7 +37,7 @@ test("cart, catalog and session regressions against PostgreSQL", async (t) => {
     );
     const product = (
       await client.query(
-        "SELECT p.* FROM cart_items c JOIN products p ON p.prod_id = c.prod_id WHERE c.user_id = $1 ORDER BY p.prod_id LIMIT 1",
+        "SELECT p.* FROM cart_items c JOIN products p ON p.prod_id = c.prod_id WHERE c.user_id = :1 ORDER BY p.prod_id FETCH FIRST 1 ROW ONLY",
         [customer.user_id],
       )
     ).rows[0];
@@ -86,7 +64,7 @@ test("cart, catalog and session regressions against PostgreSQL", async (t) => {
     const quantity = async () =>
       (
         await client.query(
-          "SELECT quantity FROM cart_items WHERE user_id = $1 AND prod_id = $2",
+          "SELECT quantity FROM cart_items WHERE user_id = :1 AND prod_id = :2",
           [customer.user_id, product.prod_id],
         )
       ).rows[0]?.quantity;
@@ -175,11 +153,11 @@ test("cart, catalog and session regressions against PostgreSQL", async (t) => {
       "adding to a maximum-size cart never overflows an integer",
       async () => {
         await client.query(
-          "UPDATE products SET in_stock = 2147483647 WHERE prod_id = $1",
+          "UPDATE products SET in_stock = 2147483647 WHERE prod_id = :1",
           [product.prod_id],
         );
         await client.query(
-          "UPDATE cart_items SET quantity = 2147483646 WHERE user_id = $1 AND prod_id = $2",
+          "UPDATE cart_items SET quantity = 2147483646 WHERE user_id = :1 AND prod_id = :2",
           [customer.user_id, product.prod_id],
         );
         assert.equal(
@@ -242,22 +220,22 @@ test("cart, catalog and session regressions against PostgreSQL", async (t) => {
     for (const [name, sql, id] of [
       [
         "out-of-stock listing",
-        "UPDATE products SET in_stock = 0 WHERE prod_id = $1",
+        "UPDATE products SET in_stock = 0 WHERE prod_id = :1",
         product.prod_id,
       ],
       [
         "discontinued listing",
-        "UPDATE products SET discontinued = true WHERE prod_id = $1",
+        "UPDATE products SET discontinued = 1 WHERE prod_id = :1",
         product.prod_id,
       ],
       [
         "disabled shop",
-        "UPDATE shops SET active_status = 'disabled' WHERE shop_id = $1",
+        "UPDATE shops SET active_status = 'disabled' WHERE shop_id = :1",
         product.shop_id,
       ],
       [
         "discontinued master product",
-        "UPDATE master_products SET active_status = 'discontinued' WHERE master_prod_id = $1",
+        "UPDATE master_products SET active_status = 'discontinued' WHERE master_prod_id = :1",
         product.master_prod_id,
       ],
     ]) {
@@ -372,10 +350,11 @@ test("cart, catalog and session regressions against PostgreSQL", async (t) => {
     });
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

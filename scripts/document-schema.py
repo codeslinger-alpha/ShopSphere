@@ -6,7 +6,10 @@ root = Path(__file__).resolve().parent.parent
 sql = (root / 'server/sql/schema.sql').read_text()
 sql = re.sub(r'/\*.*?\*/|--[^\n]*', '', sql, flags=re.S)
 tables = {}
-for match in re.finditer(r'create\s+table\s+(\w+)\s*\((.*?)\)\s*;', sql, re.I | re.S):
+# Statements are terminated by a line holding only "/", which is how the runner
+# hands one statement at a time to Oracle, rather than by the semicolon this
+# generator was first written against.
+for match in re.finditer(r'create\s+table\s+(\w+)\s*\((.*?)\)\s*\n\s*/', sql, re.I | re.S):
     name, body = match.groups()
     fields, start, depth = [], 0, 0
     for i, char in enumerate(body):
@@ -21,8 +24,11 @@ for match in re.finditer(r'create\s+table\s+(\w+)\s*\((.*?)\)\s*;', sql, re.I | 
         if field.upper().startswith('PRIMARY KEY'):
             composite = re.search(r'\((.*?)\)', field).group(1).replace(' ', '').split(',')
         else:
-            col, dtype, *rest = field.split()
-            definition = ' '.join(rest)
+            # The type is read as one token, parentheses included: Oracle writes
+            # VARCHAR2(300 CHAR) and NUMBER(10,2), and splitting on whitespace
+            # would take the length for the constraint that follows it.
+            col, dtype, definition = re.match(
+                r'(\w+)\s+([\w]+(?:\([^)]*\))?)\s*(.*)$', field, re.S).groups()
             reference = re.search(r'REFERENCES\s+(\w+)\s*\((\w+)\)', definition, re.I)
             columns.append({'name':col,'type':dtype,'definition':definition,'reference':reference.groups() if reference else None})
     for col in columns:
@@ -76,8 +82,8 @@ out += ['## Normalization and deliberate exceptions', '',
         '- Listing name/images duplicate master identity for compatibility with the original schema; master edits synchronize them through the API. Direct SQL maintenance must preserve this rule. This is a deliberate denormalization rather than a claim of strict 3NF for every table.',
         '- Wholesale and order unit prices are historical snapshots. They must not change when current catalog prices change.',
         '- Order total is a derived cache maintained by a trigger, and `shops.balance` is a running total of delivered sales, recharges, wholesale purchases and refunds, so gross value and a shop\'s spendable money never share a field.',
-        '- Points retain the existing schema but have no accounting policy; `users.point` is read and never written. The shop balance and courier earnings do have one, invented rather than supplied: see docs/REFUNDS_AND_READ_SURFACES.md. There is no platform commission anywhere.',
-        '- Attribute values are text (an entity/attribute/value model); category requirements are enforced on available masters at transaction commit.',
+        '- Points retain the existing schema but have no accounting policy; `users.point` is read and never written. The shop balance and courier earnings do have one, invented rather than supplied: see docs/BACKEND.md. There is no platform commission anywhere.',
+        '- Attribute values are text (an entity/attribute/value model); category requirements are checked by the admin API before commit using incomplete_masters.',
         '- Images and phone_numbers currently store one URL/phone per row. Multi-image and multi-phone storage is not modeled as comma-separated lists.',
         '- There is no permissions/role_permissions pair. They are not part of the canonical schema; authorization is requireRole per mounted router.',
         '', '## Computed function and workflow procedure', '',
@@ -91,8 +97,8 @@ out += ['## Normalization and deliberate exceptions', '',
         '- Cancelling a pending order restores stock once, detaches its courier and marks pending payments failed; line items remain.',
         '- Order status transitions are restricted; line-item changes recalculate both old and new order totals when moved.',
         '- Product reviews require a delivered order for that exact customer/listing, and shop reviews require a delivered order for any listing from that shop, on both INSERT and UPDATE.',
-        '- A return is only legal on a delivered order, and the units returned across all non-rejected requests for one order line cannot exceed the quantity bought. A partial unique index keeps one open request per line; a rejected one frees the line for a second attempt.',
-        '- Deferred category-value constraints validate masters, requirements and value edits atomically.',
+        '- A return is only legal on a delivered order, and the units returned across all non-rejected requests for one order line cannot exceed the quantity bought. One open request per line is kept by a unique index whose key is a CASE that yields NULL for a closed request, which is Oracle\'s spelling of the partial index this rule was first written as.',
+        '- Category-attribute requirements on available masters are checked by adminCatalogController as the last statement of saveMaster and saveCategory, against the incomplete_masters view. PostgreSQL deferred that check to the commit; Oracle defers constraints, not triggers, so it lives where the commit does and a direct SQL writer can still record an incomplete master.',
         '', 'Country/category cascade deletes exist in the original DDL. There are no public country-delete endpoints, and the admin API rejects deletion of categories with children or master products. Shop-owner/delivery role ownership is enforced by API write paths, not by role-specific foreign keys.', '']
 (root / 'docs/SCHEMA.md').write_text('\n'.join(out))
 print('Documented', len(tables), 'tables and', sum(bool(c['reference']) for cs in tables.values() for c in cs), 'foreign keys.')

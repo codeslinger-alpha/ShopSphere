@@ -103,6 +103,11 @@ router.put("/delivery/profile", role.updateDeliveryStatus);
 // guard rather than the customer one in orderRoutes.js.
 router.get("/delivery/deliveries", order.listDeliveries);
 router.put("/delivery/orders/:orderId/status", order.advanceDelivery);
+// The open board: placed orders no courier has taken, and the claim that takes
+// one. Reading the board and claiming from it are separate so that a courier can
+// look without committing, the same way the return pickups below work.
+router.get("/delivery/open-orders", order.listOpenOrders);
+router.put("/delivery/orders/:orderId/claim", order.claimOrder);
 // The pickups: approved returns waiting for a courier, and the one transition
 // that takes one off that list.
 router.get("/delivery/returns", returns.forCourier);

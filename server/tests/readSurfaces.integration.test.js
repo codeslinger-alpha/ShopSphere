@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
+const scratch = require("./scratch-schema");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
@@ -26,47 +26,16 @@ const { createAuthToken } = require("../src/utils/authToken");
 // Every check runs inside a savepoint that is rolled back, so each sees the same
 // seeded starting point even though several of them move stock and money.
 test("the money columns and the role-scoped read surfaces", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
   let client;
+  let namespace;
   let server;
   const originalQuery = pool.query;
   const originalConnect = pool.connect;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_reads_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
-    pool.query = (...args) => client.query(...args);
-    // transaction() calls pool.connect(), which would hand back a different
-    // pooled connection — outside this schema and outside this transaction, so an
-    // order would be written to the real remote database. Route it back here,
-    // turning BEGIN/COMMIT/ROLLBACK into savepoints so the nesting keeps real
-    // semantics while the outer transaction still discards everything at the end.
-    let transactionDepth = 0;
-    pool.connect = async () => {
-      const savepoint = `reads_tx_${++transactionDepth}`;
-      return {
-        query: async (text, values) => {
-          const statement = String(text).trim().toUpperCase();
-          if (statement === "BEGIN")
-            return client.query(`SAVEPOINT ${savepoint}`);
-          if (statement === "COMMIT")
-            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          if (statement === "ROLLBACK")
-            return client
-              .query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
-              .then(() => client.query(`RELEASE SAVEPOINT ${savepoint}`));
-          return client.query(text, values);
-        },
-        release: () => {},
-      };
-    };
+    namespace = await scratch.create(client, "SHOPSPHERE_READSURFACES");
+    await scratch.load(client);
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -97,7 +66,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     }
 
     const shopId = async (name) =>
-      (await client.query("SELECT shop_id FROM shops WHERE name = $1", [name]))
+      (await client.query("SELECT shop_id FROM shops WHERE name = :1", [name]))
         .rows[0].shop_id;
     const listingId = async (shop, master) =>
       (
@@ -105,7 +74,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
           `SELECT p.prod_id FROM products p
            JOIN shops s ON s.shop_id = p.shop_id
            JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
-           WHERE s.name = $1 AND mp.name = $2`,
+           WHERE s.name = :1 AND mp.name = :2`,
           [shop, master],
         )
       ).rows[0].prod_id;
@@ -113,7 +82,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       (
         await client.query(
           `SELECT order_id FROM orders
-           WHERE user_id = $1 AND order_status = $2
+           WHERE user_id = :1 AND order_status = :2
              AND created_at = TIMESTAMP '2026-09-01 10:00:00'`,
           [userId, status],
         )
@@ -124,20 +93,20 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     const keyboard = await listingId("Demo Tech Corner", "Demo Wireless Keyboard");
 
     const setStock = (prodId, quantity) =>
-      client.query("UPDATE products SET in_stock = $2 WHERE prod_id = $1", [
+      client.query("UPDATE products SET in_stock = :2 WHERE prod_id = :1", [
         prodId,
         quantity,
       ]);
     const setPrice = (prodId, price) =>
-      client.query("UPDATE products SET unit_price = $2 WHERE prod_id = $1", [
+      client.query("UPDATE products SET unit_price = :2 WHERE prod_id = :1", [
         prodId,
         price,
       ]);
     const setCart = async (userId, lines) => {
-      await client.query("DELETE FROM cart_items WHERE user_id = $1", [userId]);
+      await client.query("DELETE FROM cart_items WHERE user_id = :1", [userId]);
       for (const [prodId, quantity] of lines)
         await client.query(
-          "INSERT INTO cart_items (user_id, prod_id, quantity) VALUES ($1, $2, $3)",
+          "INSERT INTO cart_items (user_id, prod_id, quantity) VALUES (:1, :2, :3)",
           [userId, prodId, quantity],
         );
     };
@@ -146,8 +115,15 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     const placeOrder = (user, body = {}) =>
       request("/api/orders", { user, method: "POST", body });
 
-    // The route a courier actually walks: shipped, then delivered.
+    // The route a courier actually walks: take the order off the open board, then
+    // shipped, then delivered. The claim is first because the two moves below are
+    // refused until the order is theirs.
     const deliver = async (user, id) => {
+      const claimed = await request(`/api/delivery/orders/${id}/claim`, {
+        user,
+        method: "PUT",
+      });
+      assert.equal(claimed.status, 200, claimed.data.message);
       const shipped = await request(`/api/delivery/orders/${id}/status`, {
         user,
         method: "PUT",
@@ -164,21 +140,21 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     const deliveryCostOf = async (id) =>
       Number(
         (
-          await one("SELECT delivery_cost FROM orders WHERE order_id = $1", [id])
+          await one("SELECT delivery_cost FROM orders WHERE order_id = :1", [id])
         ).delivery_cost,
       );
     const deliveryEarnings = async () =>
       Number(
         (
           await one(
-            "SELECT earnings FROM delivery_personnel WHERE delivery_person_id = $1",
+            "SELECT earnings FROM delivery_personnel WHERE delivery_person_id = :1",
             [courier.user_id],
           )
         ).earnings,
       );
     const shopBalance = async (id) =>
       Number(
-        (await one("SELECT balance FROM shops WHERE shop_id = $1", [id]))
+        (await one("SELECT balance FROM shops WHERE shop_id = :1", [id]))
           .balance,
       );
     // Two decimals, the way the database rounds it, so a float artefact in the
@@ -217,7 +193,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         assert.equal(await deliveryCostOf(id), expected);
 
         const payment = await one(
-          "SELECT amount FROM payments WHERE order_id = $1",
+          "SELECT amount FROM payments WHERE order_id = :1",
           [id],
         );
         assert.equal(Number(payment.amount), cents(30.3 + expected));
@@ -235,7 +211,9 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       // that settlement honours the stored figure.
       const expected = await deliveryCostOf(id);
       assert.equal(Number(placed.data.order.delivery_cost), expected);
-      assert.equal(placed.data.order.delivery_person_id, courier.user_id);
+      // Placed belonging to nobody: the pay the board advertises is the stored
+      // figure, and it is what settlement owes whoever takes the order.
+      assert.equal(placed.data.order.delivery_person_id, null);
 
       const delivered = await deliver(courier, id);
       assert.equal(delivered.status, 200, delivered.data.message);
@@ -262,7 +240,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       const placed = await placeOrder(customer);
       const id = placed.data.order.order_id;
       const owed = await one(
-        "SELECT payment_status FROM payments WHERE order_id = $1",
+        "SELECT payment_status FROM payments WHERE order_id = :1",
         [id],
       );
       assert.equal(owed.payment_status, "pending");
@@ -278,14 +256,14 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
       // collected against it and no courier was paid — the payment is failed, not
       // left pending, so it cannot later look like money owed.
       const payment = await one(
-        "SELECT payment_status, paid_at FROM payments WHERE order_id = $1",
+        "SELECT payment_status, paid_at FROM payments WHERE order_id = :1",
         [id],
       );
       assert.equal(payment.payment_status, "failed");
       assert.equal(payment.paid_at, null);
       assert.equal(
         (
-          await one("SELECT delivery_person_id FROM orders WHERE order_id = $1", [
+          await one("SELECT delivery_person_id FROM orders WHERE order_id = :1", [
             id,
           ])
         ).delivery_person_id,
@@ -390,7 +368,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         assert.ok(mine.data.length > 0);
         const ids = mine.data.map((item) => item.order_id);
         const owned = (
-          await client.query("SELECT order_id FROM orders WHERE user_id = $1", [
+          await client.query("SELECT order_id FROM orders WHERE user_id = :1", [
             customer.user_id,
           ])
         ).rows.map((row) => row.order_id);
@@ -437,7 +415,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
 
         const ownedShops = (
           await client.query(
-            "SELECT shop_id, name, balance FROM shops WHERE owner = $1",
+            "SELECT shop_id, name, balance FROM shops WHERE owner = :1",
             [vendor.user_id],
           )
         ).rows;
@@ -458,26 +436,26 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         // against a number written down here, so a seeded price change cannot
         // make this pass by coincidence.
         const spend = await one(
-          `SELECT COALESCE(SUM(sp.quantity * sp.wholesale_unit_price), 0)::numeric(12,2) AS value
-           FROM shop_purchases sp JOIN shops s ON s.shop_id = sp.shop_id WHERE s.owner = $1`,
+          `SELECT COALESCE(SUM(sp.quantity * sp.wholesale_unit_price), 0) AS value
+           FROM shop_purchases sp JOIN shops s ON s.shop_id = sp.shop_id WHERE s.owner = :1`,
           [vendor.user_id],
         );
         assert.equal(Number(totals.wholesale_spend), Number(spend.value));
         const purchaseRows = await one(
-          `SELECT COUNT(*)::int AS count FROM shop_purchases sp
-           JOIN shops s ON s.shop_id = sp.shop_id WHERE s.owner = $1`,
+          `SELECT COUNT(*) AS count FROM shop_purchases sp
+           JOIN shops s ON s.shop_id = sp.shop_id WHERE s.owner = :1`,
           [vendor.user_id],
         );
         assert.equal(purchases.length, purchaseRows.count);
         assert.ok(purchases.every((row) => row.shop_name === "Demo Tech Corner"));
 
         const gross = await one(
-          `SELECT COALESCE(SUM(oi.quantity * oi.unit_price), 0)::numeric(12,2) AS value
+          `SELECT COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS value
            FROM order_items oi
            JOIN orders o ON o.order_id = oi.order_id
            JOIN products p ON p.prod_id = oi.prod_id
            JOIN shops s ON s.shop_id = p.shop_id
-           WHERE s.owner = $1 AND o.order_status <> 'cancelled'`,
+           WHERE s.owner = :1 AND o.order_status <> 'cancelled'`,
           [vendor.user_id],
         );
         assert.equal(Number(totals.gross_sales), Number(gross.value));
@@ -548,8 +526,8 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         // to start trusting it.
         const tables = (
           await client.query(
-            `SELECT to_regclass('permissions') AS permissions,
-                    to_regclass('role_permissions') AS role_permissions`,
+            `SELECT (SELECT table_name FROM all_tables WHERE owner=SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AND table_name='PERMISSIONS') AS permissions,
+                    (SELECT table_name FROM all_tables WHERE owner=SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AND table_name='ROLE_PERMISSIONS') AS role_permissions FROM dual`,
           )
         ).rows[0];
         assert.equal(tables.permissions, null);
@@ -562,7 +540,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         // roles survives: it is what a user's role actually points at.
         assert.equal(
           Number(
-            (await client.query("SELECT COUNT(*)::int AS count FROM roles"))
+            (await client.query("SELECT COUNT(*) AS count FROM roles"))
               .rows[0].count,
           ),
           4,
@@ -608,7 +586,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         assert.equal(updated.status, 200);
         assert.equal(updated.data.review.rating, 3);
         const rows = await client.query(
-          "SELECT COUNT(*)::int AS count FROM shop_reviews WHERE user_id = $1 AND shop_id = $2",
+          "SELECT COUNT(*) AS count FROM shop_reviews WHERE user_id = :1 AND shop_id = :2",
           [customer.user_id, techCorner],
         );
         assert.equal(rows.rows[0].count, 1);
@@ -661,7 +639,7 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         await assert.rejects(
           () =>
             client.query(
-              "INSERT INTO shop_reviews (user_id, shop_id, rating) VALUES ($1, $2, 1)",
+              "INSERT INTO shop_reviews (user_id, shop_id, rating) VALUES (:1, :2, 1)",
               [customer2.user_id, techCorner],
             ),
           /delivered order from this shop/,
@@ -673,14 +651,14 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         // seed already reviewed this shop on this customer's behalf, and the
         // UPDATE half of the statement exercises the trigger's second event.
         await client.query(
-          `INSERT INTO shop_reviews (user_id, shop_id, rating, review)
-           VALUES ($1, $2, 2, 'Trigger test.')
-           ON CONFLICT (user_id, shop_id)
-           DO UPDATE SET rating = EXCLUDED.rating, review = EXCLUDED.review`,
+          `MERGE INTO shop_reviews r USING (SELECT :1 AS user_id, :2 AS shop_id FROM dual) s
+           ON (r.user_id=s.user_id AND r.shop_id=s.shop_id)
+           WHEN MATCHED THEN UPDATE SET rating=2, review='Trigger test.'
+           WHEN NOT MATCHED THEN INSERT (user_id,shop_id,rating,review) VALUES(s.user_id,s.shop_id,2,'Trigger test.')`,
           [customer.user_id, gadgetHouse],
         );
         const stored = await one(
-          "SELECT rating FROM shop_reviews WHERE user_id = $1 AND shop_id = $2",
+          "SELECT rating FROM shop_reviews WHERE user_id = :1 AND shop_id = :2",
           [customer.user_id, gadgetHouse],
         );
         assert.equal(stored.rating, 2);
@@ -689,17 +667,17 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
         // because the list is ordered by it.
         const before = (
           await one(
-            "SELECT last_modified FROM shop_reviews WHERE user_id = $1 AND shop_id = $2",
+            "SELECT last_modified FROM shop_reviews WHERE user_id = :1 AND shop_id = :2",
             [customer.user_id, gadgetHouse],
           )
         ).last_modified.getTime();
         await client.query(
-          "UPDATE shop_reviews SET rating = 1 WHERE user_id = $1 AND shop_id = $2",
+          "UPDATE shop_reviews SET rating = 1 WHERE user_id = :1 AND shop_id = :2",
           [customer.user_id, gadgetHouse],
         );
         const after = (
           await one(
-            "SELECT last_modified FROM shop_reviews WHERE user_id = $1 AND shop_id = $2",
+            "SELECT last_modified FROM shop_reviews WHERE user_id = :1 AND shop_id = :2",
             [customer.user_id, gadgetHouse],
           )
         ).last_modified.getTime();
@@ -715,8 +693,8 @@ test("the money columns and the role-scoped read surfaces", async (t) => {
     // of exiting — the one failure mode that looks like a slow test.
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

@@ -45,12 +45,11 @@ async function save(req, res) {
       "Only customers with a delivered order from this shop can review it.",
     );
 
-  const result = await transaction.query(q.UPSERT_SHOP_REVIEW, [
-    req.user.user_id,
-    shopId,
-    rating,
-    review,
-  ]);
+  // PL/SQL, like the product-review upsert: see the note in reviewController.
+  const result = await transaction.query(
+    q.UPSERT_SHOP_REVIEW.text,
+    q.UPSERT_SHOP_REVIEW.binds(req.user.user_id, shopId, rating, review),
+  );
   res.json({ message: "Shop review saved.", review: result.rows[0] });
 }
 

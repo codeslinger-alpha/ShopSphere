@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
+const scratch = require("./scratch-schema");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
@@ -27,47 +27,17 @@ const { createAuthToken } = require("../src/utils/authToken");
 // Every check runs in a savepoint that is rolled back, so each one starts from
 // the same seeded database even though the checks deliver orders and refund
 // customers.
-test("customer returns and the shop balance against PostgreSQL", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
+test("customer returns and the shop balance against Oracle", async (t) => {
   let client;
+  let namespace;
   let server;
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_returns_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
-    pool.query = (...args) => client.query(...args);
-    // transaction() calls pool.connect(), which would hand back a different
-    // pooled connection — outside this schema and outside this transaction, so a
-    // refund would be charged to the real database. Route it back here, turning
-    // BEGIN/COMMIT/ROLLBACK into savepoints so the nesting keeps real semantics
-    // while the outer transaction still discards everything at the end.
-    let transactionDepth = 0;
-    pool.connect = async () => {
-      const savepoint = `returns_tx_${++transactionDepth}`;
-      return {
-        query: async (text, values) => {
-          const statement = String(text).trim().toUpperCase();
-          if (statement === "BEGIN")
-            return client.query(`SAVEPOINT ${savepoint}`);
-          if (statement === "COMMIT")
-            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          if (statement === "ROLLBACK")
-            return client
-              .query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
-              .then(() => client.query(`RELEASE SAVEPOINT ${savepoint}`));
-          return client.query(text, values);
-        },
-        release: () => {},
-      };
-    };
+    namespace = await scratch.create(client, "SHOPSPHERE_RETURNS");
+    await scratch.load(client);
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -100,66 +70,66 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
     const scalar = async (sql, values = []) =>
       Object.values((await client.query(sql, values)).rows[0])[0];
     const shopByName = async (name) =>
-      scalar("SELECT shop_id FROM shops WHERE name = $1", [name]);
+      scalar("SELECT shop_id FROM shops WHERE name = :1", [name]);
     const masterByName = async (name) =>
       scalar(
-        "SELECT master_prod_id FROM master_products WHERE name = $1 AND manufacturer = 'ShopSphere Demo'",
+        "SELECT master_prod_id FROM master_products WHERE name = :1 AND manufacturer = 'ShopSphere Demo'",
         [name],
       );
     const techCorner = await shopByName("Demo Tech Corner");
     const gadgetHouse = await shopByName("Demo Gadget House");
 
     const shopOf = (prodId) =>
-      scalar("SELECT shop_id FROM products WHERE prod_id = $1", [prodId]);
+      scalar("SELECT shop_id FROM products WHERE prod_id = :1", [prodId]);
     const balanceOf = (shopId) =>
-      scalar("SELECT balance FROM shops WHERE shop_id = $1", [shopId]).then(
+      scalar("SELECT balance FROM shops WHERE shop_id = :1", [shopId]).then(
         Number,
       );
     const setBalance = (shopId, amount) =>
-      client.query("UPDATE shops SET balance = $2 WHERE shop_id = $1", [
+      client.query("UPDATE shops SET balance = :2 WHERE shop_id = :1", [
         shopId,
         amount,
       ]);
     const stockOf = (prodId) =>
-      scalar("SELECT in_stock FROM products WHERE prod_id = $1", [prodId]);
+      scalar("SELECT in_stock FROM products WHERE prod_id = :1", [prodId]);
     const earningsOf = (userId) =>
       scalar(
-        "SELECT earnings FROM delivery_personnel WHERE delivery_person_id = $1",
+        "SELECT earnings FROM delivery_personnel WHERE delivery_person_id = :1",
         [userId],
       ).then(Number);
     const purchasesOf = (shopId) =>
-      scalar("SELECT COUNT(*)::int FROM shop_purchases WHERE shop_id = $1", [
+      scalar("SELECT COUNT(*) FROM shop_purchases WHERE shop_id = :1", [
         shopId,
       ]);
     const orderFor = (email, status) =>
       scalar(
         `SELECT o.order_id FROM orders o JOIN users u ON u.user_id = o.user_id
-         WHERE u.email = $1 AND o.order_status = $2`,
+         WHERE u.email = :1 AND o.order_status = :2`,
         [email, status],
       );
     const itemsOf = async (orderId) =>
       (
         await client.query(
-          "SELECT prod_id, quantity, unit_price FROM order_items WHERE order_id = $1 ORDER BY prod_id",
+          "SELECT prod_id, quantity, unit_price FROM order_items WHERE order_id = :1 ORDER BY prod_id",
           [orderId],
         )
       ).rows;
     const refundsOf = async (shopId) =>
       (
         await client.query(
-          "SELECT * FROM customer_refunds WHERE shop_id = $1",
+          "SELECT * FROM customer_refunds WHERE shop_id = :1",
           [shopId],
         )
       ).rows;
     const returnsOf = async (orderId) =>
       (
         await client.query(
-          "SELECT * FROM product_returns WHERE order_id = $1 ORDER BY return_id",
+          "SELECT * FROM product_returns WHERE order_id = :1 ORDER BY return_id",
           [orderId],
         )
       ).rows;
     const clearReturns = (orderId) =>
-      client.query("DELETE FROM product_returns WHERE order_id = $1", [orderId]);
+      client.query("DELETE FROM product_returns WHERE order_id = :1", [orderId]);
 
     const deliveredOrder = await orderFor("customer@shopsphere.test", "delivered");
     // The seeded delivered order carries one unit of each of three listings, two
@@ -180,7 +150,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
     // in one shop.
     const identityBreaks = () =>
       scalar(`
-        SELECT COUNT(*)::int FROM shops s
+        SELECT COUNT(*) FROM shops s
         WHERE s.balance <> COALESCE((
                 SELECT SUM(oi.quantity * oi.unit_price)
                 FROM order_items oi
@@ -298,7 +268,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
           client.query(
             `INSERT INTO product_returns
                (order_id, prod_id, user_id, shop_id, quantity, reason, status, refund_amount)
-             VALUES ($1, $2, $3, $4, $5::int, 'direct', $6, $5::int * $7)`,
+             VALUES (:1, :2, :3, :4, :5, 'direct', :6, :5 * :7)`,
             [
               deliveredOrder,
               line.prod_id,
@@ -329,7 +299,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
         // however the request is written.
         await refuse(2, "a claim larger than the order line must be refused");
 
-        await insert(1, "requested");
+        await insert(1, "restocked");
         await refuse(1, "a second claim on the same unit must be refused");
         // A rejection releases the unit: it refunded nothing, so the customer is
         // still owed the chance to ask again.
@@ -574,7 +544,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
       const master = await masterByName("Demo Wireless Keyboard");
       const wholesale = Number(
         await scalar(
-          "SELECT wholesale_price FROM master_products WHERE master_prod_id = $1",
+          "SELECT wholesale_price FROM master_products WHERE master_prod_id = :1",
           [master],
         ),
       );
@@ -606,7 +576,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
       const master = await masterByName("Demo Wireless Keyboard");
       const wholesale = Number(
         await scalar(
-          "SELECT wholesale_price FROM master_products WHERE master_prod_id = $1",
+          "SELECT wholesale_price FROM master_products WHERE master_prod_id = :1",
           [master],
         ),
       );
@@ -714,14 +684,14 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
         const [item] = await itemsOf(pending);
         const itemShop = await shopOf(item.prod_id);
         const trip = Number(
-          await scalar("SELECT delivery_cost FROM orders WHERE order_id = $1", [
+          await scalar("SELECT delivery_cost FROM orders WHERE order_id = :1", [
             pending,
           ]),
         );
         assert.ok(trip > 0, "a seeded order should have its trip priced");
 
         await client.query(
-          "UPDATE orders SET delivery_person_id = $2 WHERE order_id = $1",
+          "UPDATE orders SET delivery_person_id = :2 WHERE order_id = :1",
           [pending, courier.user_id],
         );
         const courierBefore = await earningsOf(courier.user_id);
@@ -771,7 +741,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
         // its order's trip charge.
         assert.equal(
           await scalar(`
-            SELECT COUNT(*)::int FROM payments pay
+            SELECT COUNT(*) FROM payments pay
             JOIN orders o ON o.order_id = pay.order_id
             WHERE pay.amount <> o.total_amount + o.delivery_cost
           `),
@@ -784,7 +754,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
         // orders they delivered.
         assert.equal(
           await scalar(`
-            SELECT COUNT(*)::int FROM (
+            SELECT COUNT(*) FROM (
               SELECT d.delivery_person_id
               FROM delivery_personnel d
               LEFT JOIN orders o ON o.delivery_person_id = d.delivery_person_id
@@ -813,12 +783,12 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
         // and the count is the number of shops that no longer agree with their
         // sources — so it is one shop, not every shop, that has to be moved.
         await client.query(
-          "UPDATE shops SET balance = balance + 0.01 WHERE shop_id = $1",
+          "UPDATE shops SET balance = balance + 0.01 WHERE shop_id = :1",
           [lineShop],
         );
         assert.equal(await identityBreaks(), 1);
         await client.query(
-          "UPDATE shops SET balance = balance - 0.01 WHERE shop_id = $1",
+          "UPDATE shops SET balance = balance - 0.01 WHERE shop_id = :1",
           [lineShop],
         );
         assert.equal(await identityBreaks(), 0);
@@ -863,7 +833,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
         // courier's earnings, while the goods land in the shop's balance.
         const pending = await orderFor("customer2@shopsphere.test", "pending");
         await client.query(
-          "UPDATE orders SET delivery_person_id = $2 WHERE order_id = $1",
+          "UPDATE orders SET delivery_person_id = :2 WHERE order_id = :1",
           [pending, courier.user_id],
         );
         for (const status of ["shipped", "delivered"]) {
@@ -881,9 +851,9 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
     await check("the statistics agree with the balance they explain", async () => {
       const rechargedBefore = Number(
         await scalar(
-          `SELECT COALESCE(SUM(t.amount), 0)::numeric(12,2)
+          `SELECT COALESCE(SUM(t.amount), 0)
            FROM shop_topups t JOIN shops s ON s.shop_id = t.shop_id
-           WHERE s.owner = $1`,
+           WHERE s.owner = :1`,
           [vendor.user_id],
         ),
       );
@@ -905,7 +875,7 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
       // The same arithmetic the balance page shows, from the same tables.
       assert.equal(
         Number(totals.balance_total),
-        await scalar("SELECT SUM(balance)::numeric(12,2) FROM shops WHERE owner = $1", [
+        await scalar("SELECT SUM(balance) FROM shops WHERE owner = :1", [
           vendor.user_id,
         ]).then(Number),
       );
@@ -962,10 +932,11 @@ test("customer returns and the shop balance against PostgreSQL", async (t) => {
     });
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

@@ -5,14 +5,14 @@ const DELIVERY_PROFILE_COLUMNS = `vehicle_info,vehicle_type,vehicle_number,
 
 const GET_DELIVERY_PROFILE = `
     SELECT ${DELIVERY_PROFILE_COLUMNS}
-    FROM delivery_personnel WHERE delivery_person_id=$1
+    FROM delivery_personnel WHERE delivery_person_id = :1
 `;
 
 const UPDATE_DELIVERY_PROFILE = `
     UPDATE delivery_personnel
-    SET active_status=$1,vehicle_info=$2,vehicle_type=$3,vehicle_number=$4,
-        license_number=$5,vehicle_model=$6
-    WHERE delivery_person_id=$7
+    SET active_status = :1, vehicle_info = :2, vehicle_type = :3, vehicle_number = :4,
+        license_number = :5, vehicle_model = :6
+    WHERE delivery_person_id = :7
     RETURNING ${DELIVERY_PROFILE_COLUMNS}
 `;
 

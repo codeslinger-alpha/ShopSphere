@@ -1,11 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
 const pool = require("../src/db/pool");
+const scratch = require("./scratch-schema");
 
 // Catalog discovery over the real schema: search, category/subcategory scope,
 // attribute facets, price, sort and paging. Each check runs inside a savepoint
@@ -17,38 +17,32 @@ test("SQL logs summarize query configs without exposing bound values", async (t)
   const lines = [];
   t.mock.method(console, "log", (line) => lines.push(line));
   t.mock.method(console, "error", (line) => lines.push(line));
-  const query = { text: "SELECT $1::text", values: ["private@example.test"] };
+  const query = { text: "SELECT :1", values: ["private@example.test"] };
   try {
     await timedQuery({ query: async () => ({ rowCount: 1 }) }, query);
-    const failure = Object.assign(new Error("private@example.test"), { code: "XX000" });
+    const failure = Object.assign(new Error("private@example.test"), { code: "ORA-00001" });
     await assert.rejects(timedQuery({ query: async () => { throw failure; } }, query), failure);
-    assert.ok(lines.every((line) => line.includes("SELECT $1::text")));
+    assert.ok(lines.every((line) => line.includes("SELECT :1")));
     assert.ok(lines.every((line) => !line.includes("private@example.test")));
-    assert.match(lines[1], /XX000/);
+    assert.match(lines[1], /ORA-00001/);
   } finally {
     if (previous === undefined) delete process.env.LOG_SQL;
     else process.env.LOG_SQL = previous;
   }
 });
 
-test("catalog search, filtering and facets against PostgreSQL", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
+test("catalog search, filtering and facets against Oracle", async (t) => {
   let client;
   let server;
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  let namespace;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_catalog_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
+    namespace = await scratch.create(client, "SHOPSPHERE_CATALOG");
+    await scratch.load(client);
     // All API reads/writes in this test use this isolated transaction.
-    pool.query = (...args) => client.query(...args);
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -146,7 +140,7 @@ test("catalog search, filtering and facets against PostgreSQL", async (t) => {
 
       const subcategory = await one(
         `INSERT INTO categories (name, description, parent_category)
-         VALUES ('Demo Audio', 'Nested under electronics.', $1)
+         VALUES ('Demo Audio', 'Nested under electronics.', :1)
          RETURNING category_id`,
         [electronics.category_id],
       );
@@ -154,13 +148,13 @@ test("catalog search, filtering and facets against PostgreSQL", async (t) => {
         `INSERT INTO master_products
            (manufacturer, name, description, category_id, wholesale_price)
          VALUES ('ShopSphere Demo', 'Demo Subcategory Speaker',
-                 'Only reachable through its parent.', $1, 30.00)
+                 'Only reachable through its parent.', :1, 30.00)
          RETURNING master_prod_id`,
         [subcategory.category_id],
       );
       await client.query(
         `INSERT INTO products (name, master_prod_id, description, shop_id, in_stock, unit_price)
-         VALUES ('Demo Subcategory Speaker', $1, 'Nested listing.', $2, 5, 45.00)`,
+         VALUES ('Demo Subcategory Speaker', :1, 'Nested listing.', :2, 5, 45.00)`,
         [master.master_prod_id, shop.shop_id],
       );
 
@@ -322,7 +316,7 @@ test("catalog search, filtering and facets against PostgreSQL", async (t) => {
 
     await check("facets never count discontinued or unavailable listings", async () => {
       await client.query(
-        "UPDATE products SET discontinued = true WHERE name = 'Demo Wireless Keyboard'",
+        "UPDATE products SET discontinued = 1 WHERE name = 'Demo Wireless Keyboard'",
       );
       const result = await facets({ category_id: electronics.category_id });
       const black = result.data.find((row) => row.value === "Black");
@@ -376,10 +370,11 @@ test("catalog search, filtering and facets against PostgreSQL", async (t) => {
     });
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

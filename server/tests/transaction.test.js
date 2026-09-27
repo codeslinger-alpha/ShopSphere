@@ -15,13 +15,15 @@ for (const failureAt of [null, "write", "COMMIT"]) {
         if (sql === failureAt) throw failure;
         return { rows: [{ saved: true }] };
       },
-      release: () => calls.push("release"),
+      commit: async () => { calls.push("COMMIT"); if (failureAt === "COMMIT") throw failure; },
+      rollback: async () => calls.push("ROLLBACK"),
+      close: async () => calls.push("close"),
     }));
     if (failureAt) await assert.rejects(transaction.query("write"), failure);
     else assert.deepEqual((await transaction.query("write")).rows, [{ saved: true }]);
     assert.deepEqual(calls, failureAt === "write"
-      ? ["BEGIN", "write", "ROLLBACK", "release"]
-      : ["BEGIN", "write", "COMMIT", ...(failureAt ? ["ROLLBACK"] : []), "release"]);
+      ? ["write", "ROLLBACK", "close"]
+      : ["write", "COMMIT", ...(failureAt ? ["ROLLBACK"] : []), "close"]);
   });
 }
 

@@ -15,12 +15,23 @@
 // both debit the shop, and a courier tapping "collected" twice cannot restock
 // twice. rowCount 0 is how the controller learns that somebody else got there
 // first; it reports that as a 409, the same shape SHIP_ORDER and CANCEL_ORDER use.
+//
+// Four of the writes below are guarded by the owner of the shop a return belongs
+// to, which PostgreSQL expressed as `UPDATE ... FROM shops s WHERE s.shop_id =
+// r.shop_id AND s.owner = :2`. Oracle has no UPDATE ... FROM, so that join is an
+// EXISTS in the predicate — the same test, still part of the same statement, and
+// the ownership rule is still the database's rather than the controller's.
+//
+// The return is named by its table rather than by an alias throughout, because
+// Oracle's SET clause takes a bare column name: `SET r.status` is not something
+// it will parse, and the EXISTS subqueries correlate through `product_returns`
+// instead.
 
 // The columns every list returns, so the three surfaces describe a return the
 // same way and a field cannot go missing from one of them.
 const RETURN_COLUMNS = `
     r.return_id, r.order_id, r.prod_id, r.user_id, r.shop_id,
-    r.quantity, r.reason, r.status, r.refund_amount::numeric(12,2) AS refund_amount,
+    r.quantity, r.reason, r.status, r.refund_amount,
     r.decision_note, r.decided_at, r.collected_at, r.restocked_at, r.created_at,
     p.name AS listing_name, s.name AS shop_name,
     u.name AS customer_name,
@@ -44,7 +55,7 @@ const RETURN_JOINS = `
 const LIST_RETURNS_FOR_CUSTOMER = `
     SELECT ${RETURN_COLUMNS}
     ${RETURN_JOINS}
-    WHERE r.user_id = $1
+    WHERE r.user_id = :1
     ORDER BY r.return_id DESC
 `;
 
@@ -53,7 +64,7 @@ const LIST_RETURNS_FOR_CUSTOMER = `
 const LIST_RETURNS_FOR_VENDOR = `
     SELECT ${RETURN_COLUMNS}
     ${RETURN_JOINS}
-    WHERE s.owner = $1
+    WHERE s.owner = :1
     ORDER BY r.return_id DESC
 `;
 
@@ -77,7 +88,7 @@ const LIST_RETURNS_FOR_COURIER = `
     JOIN orders o ON o.order_id = r.order_id
     JOIN locations l ON l.location_id = o.shipping_address
     JOIN users cu ON cu.user_id = r.user_id
-    JOIN users me ON me.user_id = $1 AND me.active_status = 'active'
+    JOIN users me ON me.user_id = :1 AND me.active_status = 'active'
     WHERE r.status = 'approved'
     ORDER BY r.return_id
 `;
@@ -87,11 +98,11 @@ const LIST_RETURNS_FOR_COURIER = `
 const GET_CUSTOMER_RETURN = `
     SELECT ${RETURN_COLUMNS}
     ${RETURN_JOINS}
-    WHERE r.return_id = $1 AND r.user_id = $2
+    WHERE r.return_id = :1 AND r.user_id = :2
 `;
 
 // The order line a request is about, and whether it is the customer's to return.
-// The delivered test is repeated in fn_check_return_quantity, which is the
+// The delivered test is repeated in trg_check_return_quantity, which is the
 // enforcement; this read exists only to say why.
 const RETURNABLE_LINE = `
     SELECT oi.quantity AS ordered, oi.unit_price, o.order_status,
@@ -100,7 +111,7 @@ const RETURNABLE_LINE = `
     JOIN orders o ON o.order_id = oi.order_id
     JOIN products p ON p.prod_id = oi.prod_id
     JOIN shops s ON s.shop_id = p.shop_id
-    WHERE oi.order_id = $1 AND oi.prod_id = $2 AND o.user_id = $3
+    WHERE oi.order_id = :1 AND oi.prod_id = :2 AND o.user_id = :3
 `;
 
 // =========================================================
@@ -111,18 +122,22 @@ const RETURNABLE_LINE = `
 // rather than sent by the caller: the customer's own figure for what they are
 // owed is not evidence of anything.
 //
-// Quantity is cast once, explicitly, because the same parameter is both the
-// value written to an INT column and an operand of a numeric multiplication.
-// Left bare, PostgreSQL deduces integer from the column and numeric from the
-// arithmetic and refuses the statement as inconsistent (42P08).
+// The `::int` PostgreSQL needed on the quantity is gone. It was there because
+// the same parameter is both the value written to an integer column and an
+// operand of a numeric multiplication, and PostgreSQL would not deduce a type
+// that satisfies both; Oracle converts on assignment and needs no help.
+//
+// `RETURNING` on an INSERT ... SELECT reports the row only when the select found
+// one, so a request for a line that is not the caller's arrives at the caller as
+// no row — which is the 404 it already was.
 const CREATE_RETURN = `
     INSERT INTO product_returns (order_id, prod_id, user_id, shop_id, quantity, reason, refund_amount)
-    SELECT oi.order_id, oi.prod_id, o.user_id, p.shop_id, $4::int, $5,
-           ROUND($4::int * oi.unit_price, 2)
+    SELECT oi.order_id, oi.prod_id, o.user_id, p.shop_id, :4, :5,
+           ROUND(:4 * oi.unit_price, 2)
     FROM order_items oi
     JOIN orders o ON o.order_id = oi.order_id
     JOIN products p ON p.prod_id = oi.prod_id
-    WHERE oi.order_id = $1 AND oi.prod_id = $2 AND o.user_id = $3
+    WHERE oi.order_id = :1 AND oi.prod_id = :2 AND o.user_id = :3
     RETURNING return_id, order_id, prod_id, status, refund_amount
 `;
 
@@ -131,37 +146,40 @@ const CREATE_RETURN = `
 // Ownership of the shop is in the predicate, so a vendor cannot decide another
 // shop's return even by guessing a return id.
 const APPROVE_RETURN = `
-    UPDATE product_returns r
-    SET status = 'approved', decision_note = $3, decided_at = CURRENT_TIMESTAMP
-    FROM shops s
-    WHERE r.return_id = $1 AND s.shop_id = r.shop_id AND s.owner = $2
-      AND r.status = 'requested'
-    RETURNING r.return_id, r.order_id, r.prod_id, r.user_id, r.shop_id,
-              r.quantity, r.refund_amount
+    UPDATE product_returns
+    SET status = 'approved', decision_note = :3, decided_at = LOCALTIMESTAMP
+    WHERE return_id = :1 AND status = 'requested'
+      AND EXISTS (
+        SELECT 1 FROM shops s
+        WHERE s.shop_id = product_returns.shop_id AND s.owner = :2)
+    RETURNING return_id, order_id, prod_id, user_id, shop_id,
+              quantity, refund_amount
 `;
 
 // A rejection is the other decision, and it moves no money and no stock: the
 // customer keeps the goods and is owed nothing. It exists so the vendor has an
 // answer that is not silence, and so the customer can ask again.
 const REJECT_RETURN = `
-    UPDATE product_returns r
-    SET status = 'rejected', decision_note = $3, decided_at = CURRENT_TIMESTAMP
-    FROM shops s
-    WHERE r.return_id = $1 AND s.shop_id = r.shop_id AND s.owner = $2
-      AND r.status = 'requested'
-    RETURNING r.return_id, r.status
+    UPDATE product_returns
+    SET status = 'rejected', decision_note = :3, decided_at = LOCALTIMESTAMP
+    WHERE return_id = :1 AND status = 'requested'
+      AND EXISTS (
+        SELECT 1 FROM shops s
+        WHERE s.shop_id = product_returns.shop_id AND s.owner = :2)
+    RETURNING return_id, status
 `;
 
 // Any active courier may collect. "Active" is the courier's own account being
 // enabled, not their availability flag: a courier who is on another delivery is
 // still allowed to pick this up, and refusing them would only stall the return.
 const COLLECT_RETURN = `
-    UPDATE product_returns r
-    SET status = 'collected', collected_by = $2, collected_at = CURRENT_TIMESTAMP
-    FROM users u
-    WHERE r.return_id = $1 AND u.user_id = $2 AND u.active_status = 'active'
-      AND r.status = 'approved'
-    RETURNING r.return_id, r.status, r.quantity, r.prod_id, r.shop_id
+    UPDATE product_returns
+    SET status = 'collected', collected_by = :2, collected_at = LOCALTIMESTAMP
+    WHERE return_id = :1 AND status = 'approved'
+      AND EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.user_id = :2 AND u.active_status = 'active')
+    RETURNING return_id, status, quantity, prod_id, shop_id
 `;
 
 // The goods are back on the shelf. Guarded on 'collected' so a return cannot be
@@ -169,17 +187,18 @@ const COLLECT_RETURN = `
 // relist it. The in_stock increment is a separate statement in the same
 // transaction, because these are two tables and the guard is the return's own.
 const MARK_RESTOCKED = `
-    UPDATE product_returns r
-    SET status = 'restocked', restocked_at = CURRENT_TIMESTAMP
-    FROM shops s
-    WHERE r.return_id = $1 AND s.shop_id = r.shop_id AND s.owner = $2
-      AND r.status = 'collected'
-    RETURNING r.return_id, r.status, r.quantity, r.prod_id
+    UPDATE product_returns
+    SET status = 'restocked', restocked_at = LOCALTIMESTAMP
+    WHERE return_id = :1 AND status = 'collected'
+      AND EXISTS (
+        SELECT 1 FROM shops s
+        WHERE s.shop_id = product_returns.shop_id AND s.owner = :2)
+    RETURNING return_id, status, quantity, prod_id
 `;
 
 const RESTOCK_PRODUCT = `
-    UPDATE products SET in_stock = in_stock + $2
-    WHERE prod_id = $1
+    UPDATE products SET in_stock = in_stock + :2
+    WHERE prod_id = :1
     RETURNING prod_id, in_stock
 `;
 
@@ -189,14 +208,14 @@ const RESTOCK_PRODUCT = `
 // refunded money by having spent it, so this one is allowed to take the balance
 // negative. The two are separate constants so that difference is legible.
 const CHARGE_SHOP_BALANCE = `
-    UPDATE shops SET balance = balance - $2
-    WHERE shop_id = $1
+    UPDATE shops SET balance = balance - :2
+    WHERE shop_id = :1
     RETURNING shop_id, balance
 `;
 
 const CREATE_CUSTOMER_REFUND = `
     INSERT INTO customer_refunds (return_id, order_id, user_id, shop_id, amount)
-    VALUES ($1, $2, $3, $4, $5)
+    VALUES (:1, :2, :3, :4, :5)
     RETURNING refund_id, return_id, amount, created_at
 `;
 

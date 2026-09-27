@@ -28,9 +28,17 @@ async function save(req, res) {
   const rating = v.id(req.body?.rating, "Rating");
   if (rating > 5) v.fail(400, "Rating must be between 1 and 5.");
   const review = v.string(req.body?.review, "Review", 10000);
+  // The upsert is PL/SQL — Oracle's MERGE cannot report the row it wrote — so it
+  // carries its own binds, which is the only place that knows the review column
+  // is a CLOB.
   const result = await transaction.query(
-    q.UPSERT_REVIEW,
-    [req.user.user_id, v.id(req.params.productId), rating, review],
+    q.UPSERT_REVIEW.text,
+    q.UPSERT_REVIEW.binds(
+      req.user.user_id,
+      v.id(req.params.productId),
+      rating,
+      review,
+    ),
   );
   res.json({ message: "Review saved.", review: result.rows[0] });
 }

@@ -1,11 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
 const pool = require("../src/db/pool");
+const scratch = require("./scratch-schema");
 const q = require("../src/db/queries/adminCatalogQueries");
 const { createAuthToken } = require("../src/utils/authToken");
 
@@ -20,47 +20,23 @@ const { createAuthToken } = require("../src/utils/authToken");
 //
 // Every check runs in a savepoint that is rolled back, so each one sees the same
 // seeded starting point even though the checks move stock and money around.
-test("vendor refunds on admin removal against PostgreSQL", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
+test("vendor refunds on admin removal against Oracle", async (t) => {
   let client;
   let server;
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  let namespace;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_refund_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
-    pool.query = (...args) => client.query(...args);
+    namespace = await scratch.create(client, "SHOPSPHERE_REFUND");
+    await scratch.load(client);
     // transaction() calls pool.connect(), which would hand back a different
     // pooled connection — outside this schema and outside this transaction, so a
-    // refund would be credited to the real database. Route it back here, turning
-    // BEGIN/COMMIT/ROLLBACK into savepoints so the nesting keeps real semantics
-    // while the outer transaction still discards everything at the end.
-    let transactionDepth = 0;
-    pool.connect = async () => {
-      const savepoint = `refund_tx_${++transactionDepth}`;
-      return {
-        query: async (text, values) => {
-          const statement = String(text).trim().toUpperCase();
-          if (statement === "BEGIN")
-            return client.query(`SAVEPOINT ${savepoint}`);
-          if (statement === "COMMIT")
-            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          if (statement === "ROLLBACK")
-            return client
-              .query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
-              .then(() => client.query(`RELEASE SAVEPOINT ${savepoint}`));
-          return client.query(text, values);
-        },
-        release: () => {},
-      };
-    };
+    // refund would be credited to the real database. funnel() routes it back
+    // here, turning a commit or a rollback into the savepoint calls that keep
+    // the nesting's real semantics while the outer transaction still discards
+    // everything at the end.
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -88,12 +64,12 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
     }
 
     const shopId = async (name) =>
-      (await client.query("SELECT shop_id FROM shops WHERE name = $1", [name]))
+      (await client.query("SELECT shop_id FROM shops WHERE name = :1", [name]))
         .rows[0].shop_id;
     const masterId = async (name) =>
       (
         await client.query(
-          "SELECT master_prod_id FROM master_products WHERE name = $1 AND manufacturer = 'ShopSphere Demo'",
+          "SELECT master_prod_id FROM master_products WHERE name = :1 AND manufacturer = 'ShopSphere Demo'",
           [name],
         )
       ).rows[0].master_prod_id;
@@ -103,7 +79,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
           `SELECT p.prod_id FROM products p
            JOIN shops s ON s.shop_id = p.shop_id
            JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
-           WHERE s.name = $1 AND mp.name = $2`,
+           WHERE s.name = :1 AND mp.name = :2`,
           [shop, master],
         )
       ).rows[0].prod_id;
@@ -114,29 +90,29 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
     const lampMaster = await masterId("Demo Desk Lamp");
 
     const setStock = (prodId, quantity) =>
-      client.query("UPDATE products SET in_stock = $2 WHERE prod_id = $1", [
+      client.query("UPDATE products SET in_stock = :2 WHERE prod_id = :1", [
         prodId,
         quantity,
       ]);
     const stockOf = async (prodId) =>
-      (await client.query("SELECT in_stock FROM products WHERE prod_id = $1", [
+      (await client.query("SELECT in_stock FROM products WHERE prod_id = :1", [
         prodId,
       ])).rows[0].in_stock;
     const discontinuedOf = async (prodId) =>
       (
-        await client.query("SELECT discontinued FROM products WHERE prod_id = $1", [
+        await client.query("SELECT discontinued FROM products WHERE prod_id = :1", [
           prodId,
         ])
       ).rows[0].discontinued;
     const balanceOf = async (id) =>
       Number(
-        (await client.query("SELECT balance FROM shops WHERE shop_id = $1", [id]))
+        (await client.query("SELECT balance FROM shops WHERE shop_id = :1", [id]))
           .rows[0].balance ?? 0,
       );
     const refundsOf = async (prodId) =>
       (
         await client.query(
-          "SELECT * FROM vendor_refunds WHERE prod_id = $1 ORDER BY refund_id",
+          "SELECT * FROM vendor_refunds WHERE prod_id = :1 ORDER BY refund_id",
           [prodId],
         )
       ).rows;
@@ -148,15 +124,15 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
     // it rather than by trying to work around it.
     const clearPurchases = (shop, master) =>
       client.query(
-        "DELETE FROM shop_purchases WHERE shop_id = $1 AND master_prod_id = $2",
+        "DELETE FROM shop_purchases WHERE shop_id = :1 AND master_prod_id = :2",
         [shop, master],
       );
     const addPurchase = (shop, master, quantity, price, purchasedAt) =>
       client.query(
         `INSERT INTO shop_purchases
            (shop_id, master_prod_id, quantity, wholesale_unit_price, purchased_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [shop, master, quantity, price, purchasedAt],
+         VALUES (:1, :2, :3, :4, :5)`,
+        [shop, master, quantity, price, new Date(purchasedAt)],
       );
 
     const removeListing = (prodId, user = admin) =>
@@ -263,7 +239,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         // leave 4 already-refunded units on the shelf to be refunded a second
         // time.
         await setStock(listing, 6);
-        await client.query("UPDATE products SET discontinued = false WHERE prod_id = $1", [
+        await client.query("UPDATE products SET discontinued = 0 WHERE prod_id = :1", [
           listing,
         ]);
         await addPurchase(techCorner, keyboardMaster, 6, 8, "2026-07-01T00:00:00Z");
@@ -357,7 +333,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         assert.equal(await discontinuedOf(gadget), true);
         const master = (
           await client.query(
-            "SELECT active_status FROM master_products WHERE master_prod_id = $1",
+            "SELECT active_status FROM master_products WHERE master_prod_id = :1",
             [keyboardMaster],
           )
         ).rows[0];
@@ -383,7 +359,7 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
         // discontinued flag is not the test, in_stock is.
         const listing = await listingId("Demo Tech Corner", "Demo Desk Lamp");
         await setStock(listing, 15);
-        await client.query("UPDATE products SET discontinued = true WHERE prod_id = $1", [
+        await client.query("UPDATE products SET discontinued = 1 WHERE prod_id = :1", [
           listing,
         ]);
         const before = await balanceOf(techCorner);
@@ -445,10 +421,11 @@ test("vendor refunds on admin removal against PostgreSQL", async (t) => {
     );
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

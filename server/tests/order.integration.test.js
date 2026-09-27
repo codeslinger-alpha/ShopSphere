@@ -1,11 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs/promises");
 const { once } = require("node:events");
 require("dotenv").config({ quiet: true });
 process.env.JWT_SECRET = "shopsphere-isolated-regression-test-secret";
 const app = require("../src/index");
 const pool = require("../src/db/pool");
+const scratch = require("./scratch-schema");
 const { createAuthToken } = require("../src/utils/authToken");
 
 // Placing an order: what is claimed, what is refused, and what happens when two
@@ -14,61 +14,36 @@ const { createAuthToken } = require("../src/utils/authToken");
 //
 // A NOTE ON WHAT THIS PROVES. The harness routes every request through one
 // connection (see the pool.connect stub below), so two "concurrent" checkouts are
-// serialised by node-pg rather than racing inside PostgreSQL. That still exercises
-// the real guard — the claim is one conditional UPDATE and the loser sees
-// in_stock below its quantity, which is exactly what a losing racer sees — but it
-// cannot reproduce true parallel contention. The enforcement of that is the
-// predicate sitting inside the UPDATE (so the test and the decrement cannot be
-// split) plus CHECK (in_stock >= 0) on the column; the last check below asserts
-// those two mechanisms directly.
-test("order placement and cash-on-delivery settlement against PostgreSQL", async (t) => {
-  pool.options.connectionTimeoutMillis = 10000;
+// serialised by the driver rather than racing inside the database. That still
+// exercises the real guard — the claim is one conditional UPDATE and the loser
+// sees in_stock below its quantity, which is exactly what a losing racer sees —
+// but it cannot reproduce true parallel contention. The enforcement of that is
+// the predicate sitting inside the UPDATE (so the test and the decrement cannot
+// be split) plus CHECK (in_stock >= 0) on the column; the last check below
+// asserts those two mechanisms directly, and
+// tests/concurrency.integration.test.js is where two real sessions contend.
+test("order placement and cash-on-delivery settlement against Oracle", async (t) => {
   let client;
   let server;
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  let namespace;
   try {
     client = await pool.connect();
-    await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '30s'");
-    const namespace = `shopsphere_order_check_${Date.now()}`;
-    await client.query(`CREATE SCHEMA "${namespace}"`);
-    await client.query(`SET LOCAL search_path TO "${namespace}"`);
-    await client.query(await fs.readFile("sql/schema.sql", "utf8"));
-    await client.query(
-      await fs.readFile("sql/test_insert/seed_demo.sql", "utf8"),
-    );
-    pool.query = (...args) => client.query(...args);
+    namespace = await scratch.create(client, "SHOPSPHERE_ORDER");
+    await scratch.load(client);
     // transaction() calls pool.connect(), which would hand back a *different*
     // pooled connection — outside this schema and outside this transaction, so the
-    // order would be written to the real database. Route it back here.
+    // order would be written to the real database. funnel() routes it back here.
     //
-    // Unlike the admin suite's stub, BEGIN/COMMIT/ROLLBACK are not swallowed: they
-    // become savepoints. An order is placed inside one transaction and rolled back
-    // whole when any part of it fails, so a stub that ignores ROLLBACK would let a
-    // half-finished order survive and quietly defeat the very property these
-    // checks exist to prove. Savepoints give the nesting real semantics while the
-    // outer transaction still discards everything at the end.
-    let transactionDepth = 0;
-    pool.connect = async () => {
-      const savepoint = `order_tx_${++transactionDepth}`;
-      return {
-        query: async (text, values) => {
-          const statement = String(text).trim().toUpperCase();
-          if (statement === "BEGIN")
-            return client.query(`SAVEPOINT ${savepoint}`);
-          if (statement === "COMMIT")
-            return client.query(`RELEASE SAVEPOINT ${savepoint}`);
-          if (statement === "ROLLBACK")
-            // Rolling back to a savepoint leaves it in place; releasing it keeps
-            // the name from accumulating in the outer transaction.
-            return client
-              .query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
-              .then(() => client.query(`RELEASE SAVEPOINT ${savepoint}`));
-          return client.query(text, values);
-        },
-        release: () => {},
-      };
-    };
+    // Unlike the admin suite's stub, a transaction's commit and rollback are not
+    // swallowed: they become savepoint calls. An order is placed inside one
+    // transaction and rolled back whole when any part of it fails, so a stub that
+    // ignored a rollback would let a half-finished order survive and quietly
+    // defeat the very property these checks exist to prove. Savepoints give the
+    // nesting real semantics while the outer transaction still discards
+    // everything at the end.
+    scratch.funnel(pool, client);
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -80,8 +55,23 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
     const customer2 = account("customer2@shopsphere.test");    const vendor = account("vendor@shopsphere.test");
     const courier = account("delivery@shopsphere.test");
     const admin = account("admin@shopsphere.test");
+    // A second courier, so "exactly one of them can take it" is a race between
+    // two different people rather than one caller asking twice. Created here
+    // rather than seeded, and discarded with the transaction like everything else.
+    const courier2 = (
+      await client.query(
+        `INSERT INTO users (user_role, name, password_hash, email)
+         SELECT r.role_id, 'Second Courier', 'not-a-real-hash', 'courier2@shopsphere.test'
+         FROM roles r WHERE r.role_name = 'delivery'
+         RETURNING *`,
+      )
+    ).rows[0];
+    await client.query(
+      "INSERT INTO delivery_personnel (delivery_person_id, vehicle_info, active_status) VALUES (:1, 'Bicycle', 'available')",
+      [courier2.user_id],
+    );
     const countryId = (
-      await client.query("SELECT country_id FROM countries ORDER BY country_id LIMIT 1")
+      await client.query("SELECT country_id FROM countries ORDER BY country_id FETCH FIRST 1 ROW ONLY")
     ).rows[0].country_id;
 
     async function request(path, { user = customer, method = "GET", body } = {}) {
@@ -106,7 +96,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
           `SELECT p.prod_id FROM products p
            JOIN shops s ON s.shop_id = p.shop_id
            JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
-           WHERE s.name = $1 AND mp.name = $2`,
+           WHERE s.name = :1 AND mp.name = :2`,
           [shopName, productName],
         )
       ).rows[0].prod_id;
@@ -125,54 +115,90 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
     assert.notEqual(plentiful, short);
 
     const setStock = (prodId, quantity) =>
-      client.query("UPDATE products SET in_stock = $2 WHERE prod_id = $1", [
+      client.query("UPDATE products SET in_stock = :2 WHERE prod_id = :1", [
         prodId,
         quantity,
       ]);
     const stockOf = async (prodId) =>
-      (await client.query("SELECT in_stock FROM products WHERE prod_id = $1", [prodId]))
+      (await client.query("SELECT in_stock FROM products WHERE prod_id = :1", [prodId]))
         .rows[0].in_stock;
     const priceOf = async (prodId) =>
-      (await client.query("SELECT unit_price FROM products WHERE prod_id = $1", [prodId]))
+      (await client.query("SELECT unit_price FROM products WHERE prod_id = :1", [prodId]))
         .rows[0].unit_price;
     const setCart = async (userId, entries) => {
-      await client.query("DELETE FROM cart_items WHERE user_id = $1", [userId]);
+      await client.query("DELETE FROM cart_items WHERE user_id = :1", [userId]);
       for (const [prodId, quantity] of entries)
         await client.query(
-          "INSERT INTO cart_items (user_id, prod_id, quantity) VALUES ($1, $2, $3)",
+          "INSERT INTO cart_items (user_id, prod_id, quantity) VALUES (:1, :2, :3)",
           [userId, prodId, quantity],
         );
     };
     const cartOf = async (userId) =>
       (
         await client.query(
-          "SELECT prod_id, quantity FROM cart_items WHERE user_id = $1 ORDER BY prod_id",
+          "SELECT prod_id, quantity FROM cart_items WHERE user_id = :1 ORDER BY prod_id",
           [userId],
         )
       ).rows;
     const orderCount = async (userId) =>
       (
         await client.query(
-          "SELECT COUNT(*)::int AS n FROM orders WHERE user_id = $1",
+          "SELECT COUNT(*) AS n FROM orders WHERE user_id = :1",
           [userId],
         )
       ).rows[0].n;
     const salesOf = async (prodId) =>
       (
         await client.query(
-          `SELECT COUNT(*)::int AS n FROM order_items oi
+          `SELECT COUNT(*) AS n FROM order_items oi
            JOIN orders o ON o.order_id = oi.order_id
-           WHERE oi.prod_id = $1 AND o.order_status <> 'cancelled'`,
+           WHERE oi.prod_id = :1 AND o.order_status <> 'cancelled'`,
           [prodId],
         )
       ).rows[0].n;
-    const setCourierStatus = (status) =>
+    // The second courier is passed explicitly where a case needs them off duty;
+    // the default keeps every existing call about the fixture courier.
+    const setCourierStatus = (status, who = courier) =>
       client.query(
-        "UPDATE delivery_personnel SET active_status = $1 WHERE delivery_person_id = $2",
-        [status, courier.user_id],
+        "UPDATE delivery_personnel SET active_status = :1 WHERE delivery_person_id = :2",
+        [status, who.user_id],
       );
+    const setAccountStatus = (status, who) =>
+      client.query("UPDATE users SET active_status = :1 WHERE user_id = :2", [
+        status,
+        who.user_id,
+      ]);
+    // The board and the claim that takes one off it. Both are readable by any
+    // courier on duty, so most cases differ only in who is asking.
+    const board = (who = courier) =>
+      request("/api/delivery/open-orders", { user: who });
+    const runOf = (who = courier) =>
+      request("/api/delivery/deliveries", { user: who });
+    const claim = (who, orderId) =>
+      request(`/api/delivery/orders/${orderId}/claim`, { user: who, method: "PUT" });
+    const assignmentOf = async (orderId) =>
+      (
+        await client.query(
+          "SELECT delivery_person_id FROM orders WHERE order_id = :1",
+          [orderId],
+        )
+      ).rows[0].delivery_person_id;
+    // A placed order nobody has taken, which is the starting point of every
+    // board case. One item, so the amount under test is only ever the stock.
+    const placeUnassigned = async (user = customer) => {
+      await setStock(watch, 3);
+      await setCart(user.user_id, [[watch, 1]]);
+      const placed = await placeOrder(user);
+      assert.equal(placed.status, 201, placed.data.message);
+      assert.equal(
+        placed.data.order.delivery_person_id,
+        null,
+        "an order is placed belonging to nobody",
+      );
+      return placed.data.order.order_id;
+    };
     const setDiscontinued = (prodId, discontinued) =>
-      client.query("UPDATE products SET discontinued = $2 WHERE prod_id = $1", [
+      client.query("UPDATE products SET discontinued = :2 WHERE prod_id = :1", [
         prodId,
         discontinued,
       ]);
@@ -315,6 +341,11 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
         assert.equal(placed.status, 201, placed.data.message);
         const orderId = placed.data.order.order_id;
 
+        // Checkout leaves the order on the board, and the board is where this
+        // courier takes it. Every courier action below is gated on that claim, so
+        // none of it is reachable without this step.
+        assert.equal((await claim(courier, orderId)).status, 200);
+
         // The courier sees it on their run, with the parcel's contents.
         const run = await request("/api/delivery/deliveries", { user: courier });
         assert.equal(run.status, 200);
@@ -363,8 +394,9 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       const placed = await placeOrder(customer);
       assert.equal(placed.status, 201);
       const path = `/api/delivery/orders/${placed.data.order.order_id}/status`;
+      assert.equal((await claim(courier, placed.data.order.order_id)).status, 200);
       assert.equal((await request(path, { user: courier, method: "PUT", body: { order_status: "shipped" } })).status, 200);
-      const balance = (await client.query("SELECT earnings FROM delivery_personnel WHERE delivery_person_id=$1", [courier.user_id])).rows[0].earnings;
+      const balance = (await client.query("SELECT earnings FROM delivery_personnel WHERE delivery_person_id=:1", [courier.user_id])).rows[0].earnings;
       await client.query(`CREATE FUNCTION reject_settlement() RETURNS TRIGGER AS $$
         BEGIN RAISE EXCEPTION 'Simulated settlement failure'; END; $$ LANGUAGE plpgsql;
         CREATE TRIGGER reject_settlement BEFORE UPDATE ON payments
@@ -375,7 +407,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       assert.equal(order.order_status, "shipped");
       assert.equal(order.payment_status, "pending");
       assert.equal(order.delivered_at, null);
-      assert.equal((await client.query("SELECT earnings FROM delivery_personnel WHERE delivery_person_id=$1", [courier.user_id])).rows[0].earnings, balance);
+      assert.equal((await client.query("SELECT earnings FROM delivery_personnel WHERE delivery_person_id=:1", [courier.user_id])).rows[0].earnings, balance);
     });
 
     await check("a delivery cannot skip the shipped step", async () => {
@@ -383,29 +415,30 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       await setCart(customer.user_id, [[watch, 1]]);
       const placed = await placeOrder(customer);
       assert.equal(placed.status, 201, placed.data.message);
+      const orderId = placed.data.order.order_id;
+      assert.equal((await claim(courier, orderId)).status, 200);
 
       const skipped = await request(
-        `/api/delivery/orders/${placed.data.order.order_id}/status`,
+        `/api/delivery/orders/${orderId}/status`,
         { user: courier, method: "PUT", body: { order_status: "delivered" } },
       );
       assert.equal(skipped.status, 409, skipped.data.message);
       assert.match(skipped.data.message, /pending/);
     });
 
-    await check("a courier cannot touch an order that is not theirs", async () => {
-      await setStock(watch, 3);
-      await setCart(customer.user_id, [[watch, 1]]);
-      await setCourierStatus("unavailable");
-      const placed = await placeOrder(customer);
-      assert.equal(placed.status, 201, placed.data.message);
-      assert.equal(placed.data.order.delivery_person_id, null);
-      await setCourierStatus("available");
+    await check("a courier cannot move an order they have not taken", async () => {
+      const orderId = await placeUnassigned();
 
-      const touched = await request(
-        `/api/delivery/orders/${placed.data.order.order_id}/status`,
-        { user: courier, method: "PUT", body: { order_status: "shipped" } },
-      );
+      // Being on the board is not the same as holding the order: SHIP_ORDER still
+      // requires the assignment that only a claim writes, so an unclaimed order
+      // reads as not found, exactly as another courier's order does.
+      const touched = await request(`/api/delivery/orders/${orderId}/status`, {
+        user: courier,
+        method: "PUT",
+        body: { order_status: "shipped" },
+      });
       assert.equal(touched.status, 404);
+      assert.equal(await assignmentOf(orderId), null);
     });
 
     await check(
@@ -439,6 +472,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       await setCart(customer.user_id, [[watch, 1]]);
       const placed = await placeOrder(customer);
       const orderId = placed.data.order.order_id;
+      assert.equal((await claim(courier, orderId)).status, 200);
       assert.equal(
         (
           await request(`/api/delivery/orders/${orderId}/status`, {
@@ -475,31 +509,145 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       assert.equal(await stockOf(watch), 3);
     });
 
-    await check(
-      "checkout assigns an available courier, and waits when there is none",
-      async () => {
-        await setCourierStatus("available");
-        await setStock(watch, 3);
-        await setCart(customer.user_id, [[watch, 1]]);
-        const assigned = await placeOrder(customer);
-        assert.equal(assigned.status, 201, assigned.data.message);
-        assert.equal(assigned.data.order.delivery_person_id, courier.user_id);
+    await check("a placed order waits on the board, belonging to nobody", async () => {
+      const orderId = await placeUnassigned();
 
-        await setCourierStatus("unavailable");
-        await setCart(customer.user_id, [[watch, 1]]);
-        const waiting = await placeOrder(customer);
-        assert.equal(waiting.status, 201, waiting.data.message);
-        assert.equal(waiting.data.order.delivery_person_id, null);
-      },
-    );
+      // Offered to every courier on duty, not handed to one of them.
+      const open = await board();
+      assert.equal(open.status, 200, open.data.message);
+      const offered = open.data.find((order) => order.order_id === orderId);
+      assert.ok(offered, "a placed order must appear on the board");
 
-    await check("disabled couriers receive no new orders", async () => {
-      await client.query("UPDATE users SET active_status='disabled' WHERE user_id=$1", [courier.user_id]);
+      // The two figures the board shows are what the trip pays and what is
+      // collected at the door. The pay is the same number that will be credited:
+      // settle_delivery pays the delivery_cost stored here.
+      assert.ok(Number(offered.delivery_cost) > 0);
+      assert.equal(
+        Number(offered.payment_amount),
+        Number(offered.total_amount) + Number(offered.delivery_cost),
+      );
+      assert.equal(offered.street_address.length > 0, true);
+
+      // Who the customer is is deliberately withheld until the order is taken,
+      // so the columns listing the run carries are simply not selected here.
+      assert.equal(offered.customer_name, undefined);
+      assert.equal(offered.customer_phone, undefined);
+
+      // And it is on nobody's run, because nobody has taken it.
+      assert.equal(
+        (await runOf()).data.some((order) => order.order_id === orderId),
+        false,
+      );
+      assert.equal(await assignmentOf(orderId), null);
+    });
+
+    await check("taking an order is exactly once", async () => {
+      const orderId = await placeUnassigned();
+
+      const first = await claim(courier, orderId);
+      assert.equal(first.status, 200, first.data.message);
+      assert.equal(first.data.order.delivery_person_id, courier.user_id);
+
+      const second = await claim(courier2, orderId);
+      assert.equal(second.status, 409, second.data.message);
+      // The loser changed nothing: the order is still pending, still the first
+      // courier's, and still nowhere near the second courier's run.
+      assert.equal(await assignmentOf(orderId), courier.user_id);
+      assert.equal(
+        (
+          await client.query("SELECT order_status FROM orders WHERE order_id = :1", [
+            orderId,
+          ])
+        ).rows[0].order_status,
+        "pending",
+      );
+      assert.equal(
+        (await runOf(courier2)).data.some((order) => order.order_id === orderId),
+        false,
+      );
+
+      // A claimed order leaves the board for everyone, including the winner.
+      for (const who of [courier, courier2])
+        assert.equal(
+          (await board(who)).data.some((order) => order.order_id === orderId),
+          false,
+          "a claimed order must leave the board",
+        );
+
+      // The run it joined carries the contact details the board withheld.
+      const taken = (await runOf()).data.find((order) => order.order_id === orderId);
+      assert.ok(taken, "the claimed order must join the claimer's run");
+      assert.equal(taken.customer_name, "Demo Customer");
+
+      // Holding it is what unlocks the move: the claimer ships it, and the
+      // second courier could not have.
+      assert.equal(
+        (
+          await request(`/api/delivery/orders/${orderId}/status`, {
+            user: courier,
+            method: "PUT",
+            body: { order_status: "shipped" },
+          })
+        ).status,
+        200,
+      );
+    });
+
+    await check("an off-duty courier sees no board and cannot take from it", async () => {
+      const orderId = await placeUnassigned();
+      await setCourierStatus("unavailable");
+
+      // Not a board of buttons that would each fail: the query joins the caller's
+      // own row, so an off-duty courier is shown nothing at all.
+      const open = await board();
+      assert.equal(open.status, 200);
+      assert.deepEqual(open.data, []);
+
+      const refused = await claim(courier, orderId);
+      assert.equal(refused.status, 409, refused.data.message);
+      assert.equal(await assignmentOf(orderId), null);
+    });
+
+    await check("a disabled courier cannot take an order", async () => {
+      const orderId = await placeUnassigned();
+      // Marked available as a courier, but the account itself is switched off —
+      // and that is refused one layer earlier: requireAuth re-reads the user row
+      // and rejects a disabled one outright, so neither request reaches the
+      // controller. The account check inside the two queries is behind this and
+      // unreachable over HTTP; it is there for a direct SQL caller.
       await setCourierStatus("available");
-      await setCart(customer.user_id, [[watch, 1]]);
-      const placed = await placeOrder(customer);
-      assert.equal(placed.status, 201, placed.data.message);
-      assert.equal(placed.data.order.delivery_person_id, null);
+      await setAccountStatus("disabled", courier);
+
+      const open = await board();
+      assert.equal(open.status, 401, open.data.message);
+      const refused = await claim(courier, orderId);
+      assert.equal(refused.status, 401, refused.data.message);
+      assert.equal(await assignmentOf(orderId), null);
+
+      // The order is still there for somebody who is actually on duty.
+      const theirs = await claim(courier2, orderId);
+      assert.equal(theirs.status, 200, theirs.data.message);
+    });
+
+    await check("only a pending order can be taken", async () => {
+      const orderId = await placeUnassigned();
+      assert.equal((await claim(courier, orderId)).status, 200);
+      assert.equal(
+        (
+          await request(`/api/delivery/orders/${orderId}/status`, {
+            user: courier,
+            method: "PUT",
+            body: { order_status: "shipped" },
+          })
+        ).status,
+        200,
+      );
+
+      // Shipped is past the point of being offered, and a courier cannot take an
+      // order off somebody else by claiming it late.
+      const late = await claim(courier2, orderId);
+      assert.equal(late.status, 409, late.data.message);
+      assert.equal(await assignmentOf(orderId), courier.user_id);
     });
 
     await check("inherited property names are invalid delivery statuses", async () => {
@@ -516,7 +664,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
         await setCart(customer.user_id, [[watch, 1]]);
 
         const profile = (
-          await client.query("SELECT address FROM users WHERE user_id = $1", [
+          await client.query("SELECT address FROM users WHERE user_id = :1", [
             customer.user_id,
           ])
         ).rows[0].address;
@@ -525,7 +673,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
         assert.equal(plain.data.order.shipping_address, profile);
 
         const before = (
-          await client.query("SELECT COUNT(*)::int AS n FROM locations")
+          await client.query("SELECT COUNT(*) AS n FROM locations")
         ).rows[0].n;
         // Checkout emptied the cart, so the second order needs something to buy.
         await setCart(customer.user_id, [[watch, 1]]);
@@ -539,13 +687,13 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
         assert.notEqual(other.data.order.shipping_address, profile);
         // A new row, not an edit: an older order keeps the address it was sent to.
         assert.equal(
-          (await client.query("SELECT COUNT(*)::int AS n FROM locations")).rows[0].n,
+          (await client.query("SELECT COUNT(*) AS n FROM locations")).rows[0].n,
           before + 1,
         );
         assert.equal(
           (
             await client.query(
-              "SELECT street_address FROM locations WHERE location_id = $1",
+              "SELECT street_address FROM locations WHERE location_id = :1",
               [other.data.order.shipping_address],
             )
           ).rows[0].street_address,
@@ -559,7 +707,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       async () => {
         await setStock(watch, 3);
         await setCart(customer.user_id, [[watch, 1]]);
-        await client.query("UPDATE users SET address = NULL WHERE user_id = $1", [
+        await client.query("UPDATE users SET address = NULL WHERE user_id = :1", [
           customer.user_id,
         ]);
 
@@ -589,7 +737,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
       // customer2's seeded pending order is not customer's to read.
       const theirs = (
         await client.query(
-          "SELECT order_id FROM orders WHERE user_id = $1 LIMIT 1",
+          "SELECT order_id FROM orders WHERE user_id = :1 FETCH FIRST 1 ROW ONLY",
           [customer2.user_id],
         )
       ).rows[0].order_id;
@@ -687,7 +835,7 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
         // rather than reading a stale stock and acting on it.
         await setStock(keyboard, 0);
         const lost = await client.query(
-          "UPDATE products SET in_stock = in_stock - $2 WHERE prod_id = $1 AND in_stock >= $2 RETURNING in_stock",
+          "UPDATE products SET in_stock = in_stock - :2 WHERE prod_id = :1 AND in_stock >= :2 RETURNING in_stock",
           [keyboard, 1],
         );
         assert.equal(lost.rowCount, 0);
@@ -696,19 +844,20 @@ test("order placement and cash-on-delivery settlement against PostgreSQL", async
 
         // And if a predicate were ever weakened, the column refuses to go negative.
         await assert.rejects(
-          client.query("UPDATE products SET in_stock = -1 WHERE prod_id = $1", [
+          client.query("UPDATE products SET in_stock = -1 WHERE prod_id = :1", [
             keyboard,
           ]),
-          (error) => error.code === "23514",
+          (error) => error.code === "ORA-02290",
         );
       },
     );
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (client) {
-      await client.query("ROLLBACK");
-      client.release();
+      await scratch.drop(client, namespace);
+      await client.close();
     }
     await pool.end();
   }

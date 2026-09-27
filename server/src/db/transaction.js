@@ -1,25 +1,23 @@
 const pool = require("./pool");
-const { timedQuery } = require("./logger");
 
+// Oracle has no BEGIN. A transaction is simply whatever a connection has written
+// since it last committed, so this is the same promise as before — every
+// statement in the work succeeds and is committed, or the first failure rolls
+// all of them back — expressed with the two calls the database actually has.
 async function transaction(work) {
   const client = await pool.connect();
   try {
-    await timedQuery(client, "BEGIN");
-    // Object.create makes the real client the prototype, so the work function
-    // gets a logged query() while every other property still falls through to pg.
-    // Anything less would either leave the work unlogged or turn this into a
-    // client-shaped object that quietly lacks the rest of the API.
-    const session = Object.create(client, {
-      query: { value: (text, values) => timedQuery(client, text, values) },
-    });
-    const result = await work(session);
-    await timedQuery(client, "COMMIT");
+    const result = await work(client);
+    await client.commit();
     return result;
   } catch (error) {
-    await timedQuery(client, "ROLLBACK").catch(() => {});
+    // A rollback that itself fails must not replace the error that caused it:
+    // the original is the one worth reporting, and the connection is going back
+    // to the pool either way.
+    await client.rollback().catch(() => {});
     throw error;
   } finally {
-    client.release();
+    await client.close();
   }
 }
 

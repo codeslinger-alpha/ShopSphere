@@ -5,7 +5,7 @@ Run `npm install` once from the repository root, then `npm run dev` for both sid
 or `npm run dev:client` for Vite only. Open http://localhost:5173.
 The default API is http://localhost:5000/api; see `.env.example` to override it.
 
-[Full website flow, source map, API reference and DevTools walkthrough](../docs/WEBSITE_FLOW.md)
+[Full website flow, source map, API reference and DevTools walkthrough](../docs/BACKEND.md)
 
 `src/App.jsx` defines routes. `src/pages/` contains role screens;
 `src/components/FormFields.jsx` shares forms, Markdown and master facts;

@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "seed": "node scripts/seed.js",
     "test:integration": "LOG_SQL=false LOG_REQUESTS=false node --test --test-concurrency=1 tests/*.test.js",
-    "init": "node scripts/init.js"
+    "init": "node scripts/init.js",
+    "check": "node scripts/check.js"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,6 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "pg": "^8.23.0"
+    "oracledb": "^7.0.1"
   }
 }

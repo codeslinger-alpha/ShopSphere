@@ -68,6 +68,28 @@ async function createAttribute(req, res) {
     ).rows[0],
   });
 }
+// The invariant PostgreSQL enforced with a deferred constraint trigger, and
+// Oracle has no equivalent of. It is checked here, as the last statement of the
+// two transactions that can break it, because a master is written before the
+// values that complete it and an immediate check would refuse the first half of
+// a perfectly good pair.
+//
+// The refusal names the products and the values they are missing. An
+// administrator who has just added a required attribute to a category needs to
+// know which masters it stranded, and "some master is incomplete" is not that.
+function incompleteMessage(rows) {
+  const missing = new Map();
+  for (const row of rows) {
+    const values = missing.get(row.name) || [];
+    values.push(row.attribute_name);
+    missing.set(row.name, values);
+  }
+  const detail = [...missing]
+    .map(([name, values]) => `${name} has no ${values.join(" or ")}`)
+    .join("; ");
+  return `An available master product needs a value for every attribute its category requires. ${detail}.`;
+}
+
 async function saveCategory(req, res) {
   const b = req.body || {},
     categoryId = req.params.categoryId ? v.id(req.params.categoryId) : null;
@@ -118,6 +140,12 @@ async function saveCategory(req, res) {
           [category.category_id, a.id, a.value],
         );
     }
+    // A required attribute with no default leaves every existing master of this
+    // category incomplete, which is a state the catalog must not be left in.
+    const incomplete = (
+      await c.query(q.INCOMPLETE_CATEGORY_MASTERS, [category.category_id])
+    ).rows;
+    if (incomplete.length) v.fail(409, incompleteMessage(incomplete));
     return category;
   });
   res
@@ -213,6 +241,14 @@ async function saveMaster(req, res) {
       q.SYNC_MASTER_LISTINGS,
       [master.name, master.images, master.master_prod_id],
     );
+    // The master and its values are written by different statements, so the
+    // check that it ended up complete is the one that comes after both. A
+    // 'discontinued' master is exempt, which is the same exemption the schema
+    // view makes.
+    const incomplete = (
+      await c.query(q.INCOMPLETE_MASTER, [master.master_prod_id])
+    ).rows;
+    if (incomplete.length) v.fail(409, incompleteMessage(incomplete));
     return master;
   });
   res.status(id ? 200 : 201).json({ message: "Master product saved.", master });

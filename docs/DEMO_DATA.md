@@ -1,6 +1,6 @@
 # Demo dataset
 
-Run `npm run db:init` against a **new empty PostgreSQL database**, then
+Run `npm run db:init` against a **new empty Oracle schema**, then
 `npm run db:seed`. The seed runner loads both files below inside one transaction:
 
 - `server/sql/test_insert/seed_demo.sql`: small named fixtures used by the existing

@@ -16,7 +16,9 @@
     "db:seed": "npm run seed --workspace server",
     "test": "npm run test:integration --workspace server",
     "test:e2e": "npm run test:e2e --workspace client --",
-    "db:init": "npm run init --workspace server",
+    "db:init": "npm run init --workspace server --",
+    "db:check": "npm run check --workspace server",
+    "db:driver": "npm install oracledb --workspace server",
     "docs:schema": "python3 scripts/document-schema.py"
   }
 }

@@ -1,6 +1,7 @@
 # Backend guide
 
-ShopSphere uses **Express 5 + PostgreSQL (`pg`), with parameterized SQL and no ORM**.
+ShopSphere uses **Express 5 + Oracle Database (`oracledb`), with parameterized SQL
+and no ORM**.
 All endpoints below start with `/api`. There is no external payment gateway:
 checkout records cash on delivery; wholesale purchases, shop recharges and vendor
 and customer refunds are internal database records, not online transfers. No card
@@ -15,13 +16,14 @@ top-ups, wholesale purchases and refunds, spendable on stock.
 ## Request and database flow
 
 `src/index.js` → `routes/*` → authentication/role middleware → `controllers/*`
-→ `db/queries/*` → `db/pool.js` or `db/transaction.js` → PostgreSQL.
+→ `db/queries/*` → `db/pool.js` or `db/transaction.js` → Oracle Database.
 
 Routes choose handlers and access rules. Controllers validate input and coordinate
-operations. Query modules contain SQL; `$1`, `$2`, etc. bind request values.
+operations. Query modules contain SQL; `:1`, `:2`, etc. bind request values.
 Every API mutation uses `transaction(work)` or `transaction.query(sql, values)`,
-including single-statement writes. The helper reserves one connection for
-BEGIN/work/COMMIT, rolls back on failure, and always releases it. Express forwards rejected async handlers to the
+including single-statement writes. The helper reserves one connection, commits the
+work or rolls it back, and always releases it. Oracle has no `BEGIN`: a transaction
+is whatever a connection has written since it last committed. Express forwards rejected async handlers to the
 shared JSON error handler.
 
 ## Runtime files
@@ -32,12 +34,13 @@ Paths in this section are relative to `server/src/`.
 | --- | --- |
 | `index.js` | Loads `server/.env`, logs requests, configures CORS/JSON/cookies, mounts routers, returns JSON 404/errors; listens only when run directly. |
 | `middleware/authMiddleware.js` | Verifies JWT cookie, loads the current user/role, checks active status and token version; provides `requireAuth` and `requireRole`. |
-| `middleware/errorMiddleware.js` | Maps input and PostgreSQL errors to 400/409, malformed JSON to 400, oversized bodies to 413, unexpected errors to 500. |
+| `middleware/errorMiddleware.js` | Maps input errors and the database's own refusals — duplicate key, broken reference, rejected value, raised trigger sentence — to 400/409, malformed JSON to 400, oversized bodies to 413, unexpected errors to 500. |
 | `middleware/requestLogger.js` | Logs HTTP status, method, URL, duration and authenticated user ID. |
-| `db/pool.js` | One shared `pg.Pool`, configured by `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`; wraps pooled queries for logging. |
-| `db/transaction.js` | Explicit BEGIN/COMMIT/ROLLBACK for compound workflows and single-statement writes through `transaction.query`. |
+| `db/pool.js` | One shared `oracledb` pool, configured by `DB_USER`, `DB_PASSWORD`, `DB_CONNECT_STRING` and `DB_WALLET_LOCATION`; wraps pooled queries for logging. |
+| `db/execute.js` | Translates each statement for Oracle: `RETURNING` into output binds, `NUMBER(n,2)` into the two-decimal strings the client renders, `NUMBER(1)` into booleans, array binds into `IN` lists. |
+| `db/transaction.js` | Opens a connection, commits the work or rolls it back, releases it; `transaction.query` for single-statement writes. |
 | `db/logger.js` | SQL statement summaries, timing and error codes; omits bound values such as emails, addresses and password hashes. |
-| `db/sql.js` | Escapes `%`, `_` and backslash for literal `ILIKE` searches. |
+| `db/sql.js` | Escapes `%`, `_` and backslash for literal `LIKE` searches, which the schema runs as `LOWER(x) LIKE LOWER(:n) ESCAPE '\'`. |
 | `utils/authToken.js` | Signs one-day JWTs and sets/clears the HTTP-only `shopsphere_token` cookie; requires a 32-character JWT secret. |
 | `utils/input.js` | Throwing validators for IDs, strings, money, URLs, addresses and phones. |
 | `utils/validation.js` | Parsers for integers, prices, sorting, paging, search and attribute filters. |
@@ -92,6 +95,7 @@ queries prevent access to another customer's or vendor's records.
 | `roleRoutes.js` | `GET /vendor/returns`; `PUT /vendor/returns/:id/approve`, `/reject`, `/restock` | Vendor → return |
 | `roleRoutes.js` | `GET/PUT /delivery/profile` | Delivery → role |
 | `roleRoutes.js` | `GET /delivery/deliveries`; `PUT /delivery/orders/:id/status` | Delivery → order |
+| `roleRoutes.js` | `GET /delivery/open-orders`; `PUT /delivery/orders/:id/claim` | Delivery → order |
 | `roleRoutes.js` | `GET /delivery/returns`; `PUT /delivery/returns/:id/collect` | Delivery → return |
 | `adminRoutes.js` | `GET /admin/users`; `POST /admin/users`; `PUT /admin/users/:id/status` | Admin → admin / auth / admin |
 | `adminRoutes.js` | `GET /admin/shops`; `PUT /admin/shops/:id/status` | Admin → admin |
@@ -118,11 +122,10 @@ never merely a filter applied to the result.
 | Export | What it does |
 | --- | --- |
 | `COURIER_BASE_FEE`, `COURIER_RATE` | The only place the courier's pay is defined: a flat `3` plus `0.02` of the goods total. Applied at placement and **stored on the order**, so editing these changes future orders only and never re-prices one already placed. |
-| `CART_FOR_ORDER` | Locks the customer's cart rows (`FOR UPDATE OF c`) in product-ID order and returns quantity, name, price and current stock. The lock is what stops two concurrent checkouts buying the same cart twice; the ordering gives every checkout the same lock order, so two orders cannot deadlock against each other. |
-| `CLAIM_STOCK` | Decrements stock inside the `UPDATE` predicate — `in_stock >= $2` and the listing, shop and master are all sellable. There is no read-then-write gap, so an oversell is impossible even under concurrency. `rowCount = 0` means somebody else got the last unit. |
+| `CART_FOR_ORDER` | Locks the customer's cart rows (`FOR UPDATE OF c.prod_id`) in product-ID order and returns quantity, name, price and current stock. The lock is what stops two concurrent checkouts buying the same cart twice; the ordering gives every checkout the same lock order, so two orders cannot deadlock against each other. |
+| `CLAIM_STOCK` | Decrements stock inside the `UPDATE` predicate — `in_stock >= :2` and the listing, shop and master are all sellable. There is no read-then-write gap, so an oversell is impossible even under concurrency. `rowCount = 0` means somebody else got the last unit. |
 | `CLAIM_FAILURE_DETAIL` | Read only after a claim fails, to say *which* rule refused it (out of stock, discontinued, shop disabled, master withdrawn). Read at READ COMMITTED, so it sees the winner's committed state. |
-| `FIND_AVAILABLE_COURIER` | The active, available courier with the fewest open orders; the ID breaks ties. An `LEFT JOIN` on open orders counts the load rather than filtering couriers out. |
-| `CREATE_ORDER` | Inserts the order row. `total_amount` is left to the trigger. No courier found means `delivery_person_id` is `NULL` and the order waits for an administrator. |
+| `CREATE_ORDER` | Inserts the order row. `total_amount` is left to the trigger, and `delivery_person_id` is inserted as `NULL`: an order is placed belonging to nobody, and the open board below is where it finds a courier. |
 | `CREATE_ORDER_ITEM` | Freezes the price read during checkout onto the line, which is what makes a later price change irrelevant to this order. |
 | `RECORD_DELIVERY_COST` | `UPDATE orders SET delivery_cost = ROUND(base + rate * total_amount, 2)`. It runs **after** the items, because it is a share of `total_amount` and that is still 0 until `trg_order_items_recalc_total` has fired. |
 | `ORDER_TOTALS` | Reads `fn_order_subtotal(order_id)` back as the authoritative total once the trigger has run. |
@@ -134,7 +137,9 @@ never merely a filter applied to the result.
 | `CANCEL_ORDER` | `SET order_status = 'cancelled' WHERE order_id = $1 AND user_id = $2 AND order_status = 'pending'`. The status is in the predicate so two cancels racing cannot both restore stock: `fn_cleanup_cancelled_order` fires only on the transition that actually happens. |
 | `GET_ORDER_STATUS` | Read after a failed `CANCEL_ORDER`, to tell "not yours" from "already moved on". |
 | `SHIP_ORDER` | The courier's guarded start: `pending → shipped`, for this courier only. |
-| `LIST_DELIVERIES_FOR_COURIER` | The courier's own live run, with customer name and phone — details a courier needs and a vendor deliberately does not get. |
+| `LIST_OPEN_ORDERS` | The open board: `pending` orders with no courier, oldest first, and only for a caller who is an available courier with an active account. It joins the caller's own row, so an off-duty courier gets an empty board rather than a list of buttons that would each fail. It selects the address, the pay and the cash to collect, and deliberately **not** the customer's name or phone. |
+| `CLAIM_ORDER` | Takes an order off the board: sets `delivery_person_id = $2` where the order is still unassigned and `pending` **and** the caller is an available courier with an active account. Every one of those is in the `UPDATE` predicate, so two couriers racing cannot both win; `rowCount = 0` is the single answer for all of them and becomes a 409. |
+| `LIST_DELIVERIES_FOR_COURIER` | The courier's own live run, with customer name and phone — details a courier needs and a vendor deliberately does not get. Those two columns are the difference from the board: they arrive with the claim. |
 | `SETTLE_DELIVERY` | `CALL settle_delivery($1, $2, NULL)`. The whole multi-table completion lives in the database; see the PL/pgSQL section. |
 | `GET_ITEMS_FOR_ORDERS` | Every parcel on the run in one round trip (`order_id = ANY($1)`), rather than one query per order. |
 | `GET_ASSIGNED_ORDER` | Read only after `SHIP_ORDER` matches nothing, to distinguish "not your order" from "already shipped". |
@@ -248,7 +253,8 @@ inserting a second row.
   supplied), locks the cart, claims stock line by line in product order, inserts
   the order, its items, the delivery cost and the payment, then deletes only the
   purchased cart rows. Any failure rolls the whole thing back, so there is no
-  half-placed order. Assigning a courier happens in the same transaction.
+  half-placed order. It picks no courier: the order is inserted unassigned and the
+  board is what finds it one.
 - `listOrders`, `getOrder` — the customer's history and one order, both scoped by
   `user_id`.
 - `cancelOrder` — `CANCEL_ORDER`, then a read to distinguish "not yours" from
@@ -256,9 +262,17 @@ inserting a second row.
   job, not the controller's.
 - `listDeliveries` — the courier's own run, plus a second query for every parcel
   on it, so the page loads in two round trips regardless of order count.
+- `listOpenOrders` — the open board, read the same way: the orders, then every
+  parcel on them. The query is what limits it to unclaimed `pending` orders and to
+  a caller who is on duty.
+- `claimOrder` — `CLAIM_ORDER`, and a 409 when it matches nothing. The message
+  names the likeliest reason (another courier accepted it first) rather than the
+  predicate that failed, because the predicate covers several and guessing wrong
+  would be worse than saying less.
 - `advanceDelivery` — `pending → shipped` through `SHIP_ORDER`, or
   `shipped → delivered` through `CALL settle_delivery`. Both are compare-and-set;
-  `rowCount = 0` becomes a 409 after a read explains which case it was.
+  `rowCount = 0` becomes a 409 after a read explains which case it was. Both are
+  scoped to the claiming courier, so a claim is the only way in.
 
 ### `vendorController.js`
 
@@ -325,66 +339,139 @@ for products and shops. Both review controllers let the database trigger decide
 eligibility and turn its `P0001` into a 409 with the trigger's own sentence, which
 is why the message a user sees and the rule the database enforces cannot drift.
 
-## PL/pgSQL programs, program by program
+## Oracle schema and PL/SQL programs
 
-All of these live in `server/sql/schema.sql` and therefore apply to **direct SQL
-writes too**, not only to requests through the API. That is the point of putting
-them here.
+The canonical definition is [schema.sql](../server/sql/schema.sql). Oracle SQL
+creates tables, constraints, indexes and the view; **PL/SQL** implements procedural
+routines and triggers. This is no longer PostgreSQL PL/pgSQL. The generated
+[column reference and ERD](SCHEMA.md) lists every column and foreign key.
 
-### Functions
+### Tables and relationships
 
-| Function | Trigger(s) | What it does |
-| --- | --- | --- |
-| `fn_order_subtotal(p_order_id)` | — (called by others) | `LANGUAGE SQL STABLE`: the sum of `quantity × unit_price` for one order. Both the recalc trigger and the checkout read use it, so "the total" has one definition. |
-| `fn_prevent_delete()` | `trg_prevent_delete_{users, shops, master_products, products, delivery_personnel, orders}` | Raises on any `DELETE`, naming the table and telling the caller to use an `active_status`/`discontinued` flag. History is never hard-deleted. |
-| `fn_recalc_order_total()` | `trg_order_items_recalc_total` (AFTER INSERT/UPDATE/DELETE on `order_items`) | Rewrites `orders.total_amount` from `fn_order_subtotal` for the affected order. This is why `RECORD_DELIVERY_COST` must run after the items. |
-| `fn_disable_user_on_role_removal()` | `trg_disable_user_on_role_removal` | When `users.user_role` goes from set to `NULL`, the account is disabled in the same statement rather than left role-less and enabled. |
-| `fn_discontinue_products_on_shop_disable()` | `trg_discontinue_products_on_shop_disable` | A shop that becomes `disabled` takes all of its listings to `discontinued = true` with it. |
-| `fn_release_orders_on_personnel_unavailable()` | `trg_release_orders_on_personnel_unavailable` | A courier going `unavailable` has their `pending` and `shipped` orders unassigned and returned to `pending`, so a delivery cannot be stranded on someone who has stopped working. |
-| `fn_cleanup_cancelled_order()` | `trg_cleanup_cancelled_order` | On `→ cancelled`: restores each line's stock to its listing, clears `delivery_person_id`, and fails the pending payment. There is no commission to void — money never left the customer. |
-| `fn_disable_user_dependents()` | `trg_disable_user_dependents` | Disabling a user disables the shops they own and takes them off courier duty. |
-| `fn_enable_user_dependents()` | `trg_enable_user_dependents` | The reverse, deliberately partial: shops come back to `active`, but **listings stay discontinued** (the vendor consciously relists) and `delivery_personnel` is left alone (couriers set their own availability, and the disable direction may have released their orders). |
-| `fn_verify_product_review_purchase()` | `trg_verify_product_review_purchase` | Refuses a product review unless the reviewer is a customer with a **delivered** order containing that listing; also restamps `last_modified`. |
-| `fn_verify_shop_review_purchase()` | `trg_verify_shop_review_purchase` | The same rule for a shop: a delivered order containing one of that shop's listings. |
-| `fn_check_return_quantity()` | `trg_check_return_quantity` (BEFORE INSERT OR UPDATE on `product_returns`) | Two rules: only a **delivered** order can be returned, and the units returned across all non-rejected requests for one order line cannot exceed the quantity bought. Rejected requests do not count, so a refused customer may ask again. The delivered test is also what makes a return and a cancellation provably disjoint — `CANCEL_ORDER` requires `pending` — so `fn_cleanup_cancelled_order` and the restock can never both fire for the same unit. |
-| `fn_guard_order_transition()` | `trg_guard_order_transition` (BEFORE UPDATE on `orders`) | Allows only `pending → {shipped, cancelled}` and `shipped → {pending, delivered}`. Every other status change raises, so a bad transition is impossible even from `psql`. |
-| `fn_require_category_values()` | `trg_master_required_values`, `trg_category_required_values`, `trg_attribute_required_values` — all `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` | Every available master product must have a non-blank value for each attribute its category requires. Deferred to commit so a master and its values can be saved in one transaction. Requirements apply to the directly assigned category; there is no inheritance. |
+| Table | Meaning and relationships |
+| --- | --- |
+| `countries` | Country codes and unique country names; referenced by locations. |
+| `locations` | Address records referenced by users, shops and orders. Profile updates create a new record so old shipping addresses remain stable. |
+| `roles` | Unique customer, vendor, delivery and admin role names. Routers use the current role loaded through the user's foreign key. |
+| `users` | Identity, bcrypt hash, contact details, address, active status and token version. Email is unique; token version revokes existing JWTs. |
+| `shops` | Vendor-owned shops, approval status and spendable balance. Balance can become negative after a customer refund. |
+| `categories` | Parent/child category tree. The admin API rejects cycles and deletion of categories that still have children or masters. |
+| `master_products` | Shared manufacturer, category, wholesale price, description and availability. Administrators maintain these definitions. |
+| `products` | A shop's retail listing: master reference, retail price, stock and discontinued flag. Orders buy listings, not masters. |
+| `shop_purchases` | Wholesale acquisition ledger; quantity and historical unit cost. Changes to today's wholesale price do not rewrite old purchases. |
+| `vendor_refunds` | Compensation for inventory withdrawn by an administrator: listing, shop, master, units, attributed cost and acting admin. |
+| `shop_topups` | Internal demo recharge ledger, linked to the shop and user who recharged it. No external payment is charged. |
+| `attributes` | Attribute definitions such as colour or storage capacity. |
+| `category_attributes` | Composite-key links declaring a category's required attributes; requirements apply directly, without inheritance. |
+| `attribute_values` | One text value per master/attribute pair. Shared by every listing of that master. |
+| `cart_items` | One positive quantity per customer/listing pair. Cart quantities do not reserve inventory. |
+| `wish_list_items` | Saved customer/listing pairs; composite primary key prevents duplicates. |
+| `product_reviews` | One rating/review per customer/listing pair; a delivered purchase is required by a trigger. |
+| `shop_reviews` | One rating/review per customer/shop pair; a delivered order from the shop is required. |
+| `delivery_personnel` | One-to-one extension of users with vehicle details, availability and cumulative earnings. |
+| `orders` | Customer, shipping address, status, optional courier, goods total and stored delivery charge. |
+| `order_items` | Composite order/listing key with positive quantity and historical retail unit price. |
+| `payments` | Order payment amount, method, state and payment timestamp. Checkout creates pending cash-on-delivery records with a null `paid_at`. |
+| `product_returns` | Requested quantities, reason, decision, pickup and restock state for an order line. The refund amount is frozen from its historical unit price. |
+| `customer_refunds` | Money owed back to a customer after an approved return; links to the return, order, customer and shop. |
 
-### `settle_delivery(IN p_order_id INT, IN p_courier_id INT, INOUT result JSONB)`
+Identity keys are `NUMBER(10) GENERATED BY DEFAULT ON NULL AS IDENTITY`.
+Junctions use composite primary keys. Money columns use decimal numbers; the
+adapter returns fixed-scale money as strings to preserve the HTTP representation.
+`discontinued` is `NUMBER(1)` constrained to 0 or 1 and is returned as a JavaScript
+boolean. Long descriptions and reviews are CLOBs. Oracle treats empty strings as
+NULL, so optional blank text can come back as null.
 
-The one real multi-table workflow, called by the delivery API inside
-`BEGIN`/`COMMIT`. The guarded transition makes retries safe; a failure rolls back
-all four writes.
+Foreign keys ensure referenced rows exist; they do not enforce a user's business
+role. Authentication, role and ownership checks remain necessary at API boundaries.
+The schema does not declare one listing per shop/master or one payment per order
+as unique constraints; application paths depend on those conventions. A direct SQL
+writer must also preserve the relationship between cached balances and ledgers.
 
-1. `UPDATE orders SET order_status = 'delivered', delivered_at = now() WHERE
-   order_id = … AND delivery_person_id = p_courier_id AND order_status =
-   'shipped' RETURNING *`. If nothing matched, the procedure returns an empty
-   result immediately and writes nothing — that is the exactly-once guard.
-2. Completes the pending payment, dating `paid_at` from the order's own
-   `delivered_at` rather than from `now()`.
-3. Credits the courier `ROUND(delivered.delivery_cost, 2)` — **the amount the
-   customer was charged**, read back from the row rather than recomputed. Editing
-   the pay constants in `orderQueries.js` therefore cannot retroactively move money
-   on an order already placed.
-4. Credits each shop the full subtotal of its own lines, grouped by shop in one
-   statement however many shops the order spans. A sale credits the balance when it
-   is **delivered**, not when it is placed: an order still in a van is not money the
-   shop can spend on stock. There is no commission between the customer's payment
-   and the shop, and the delivery charge is the courier's, not the shop's.
-5. Builds the JSON result: the delivered order, the payment and the courier's new
-   earnings.
+### Computed function and deletion procedure
 
-### Indexes
+`fn_order_subtotal(p_order_id NUMBER) RETURN NUMBER` selects the sum of quantity
+times stored line price, uses zero for no lines, and rounds to two decimals. It is
+read-only and excludes delivery. Checkout reads it and the order-item trigger uses
+it to maintain `orders.total_amount`.
 
-`idx_orders_user_status`, `idx_order_items_product`, `idx_products_shop_master`,
-`idx_vendor_refunds_shop`, `idx_vendor_refunds_created`, `idx_shop_topups_shop`,
-`idx_product_returns_order`, `idx_product_returns_shop`,
-`idx_product_returns_courier`, and the partial unique index
-`idx_product_returns_open ON product_returns(order_id, prod_id) WHERE status IN
-('requested', 'approved', 'collected')`. That last one is what makes an open
-request unique per order line while leaving a rejected one free to be re-requested;
-the quantity trigger above is what stops the requests that *are* open from adding
-up to more than the customer bought.
+`fn_prevent_delete` is a PL/SQL **procedure** called by six BEFORE DELETE triggers:
+`trg_prevent_delete_users`, `trg_prevent_delete_shops`,
+`trg_prevent_delete_master_products`, `trg_prevent_delete_products`,
+`trg_prevent_delete_delivery_personnel` and `trg_prevent_delete_orders`.
+It raises an application error rather than silently converting a deletion into an
+update. Callers must use status changes to preserve historical references.
+
+### Trigger programs
+
+Oracle trigger bodies use `:NEW` and `:OLD`; the `WHEN` predicate omits the colons.
+A failed trigger rejects its statement. API transactions then roll back the rest
+of the workflow as well.
+
+| Trigger | Timing and behavior |
+| --- | --- |
+| `trg_order_items_recalc_total` | Compound INSERT/UPDATE/DELETE trigger. Its local `remember(p_order_id)` procedure collects old/new order IDs during row events. AFTER STATEMENT recalculates each touched order. Reading the items after the statement avoids Oracle's mutating-table restriction. |
+| `trg_disable_user_on_role_removal` | BEFORE UPDATE on users: a removed role makes the account disabled by modifying `:NEW.active_status`. |
+| `trg_discontinue_products_on_shop_disable` | AFTER UPDATE on shops: newly disabled shops discontinue all their listings. Re-enabling the shop does not automatically relist them. |
+| `trg_release_orders_on_personnel_unavailable` | AFTER UPDATE on delivery personnel: newly unavailable couriers release pending/shipped orders and return those orders to pending. |
+| `trg_cleanup_cancelled_order` | BEFORE UPDATE on orders: entering cancelled restores stock, clears the new courier field and fails pending payments. Items remain as history. |
+| `trg_disable_user_dependents` | AFTER UPDATE on users: newly disabled users have their shops disabled and delivery profile made unavailable, invoking the downstream triggers. |
+| `trg_enable_user_dependents` | AFTER UPDATE on users: restoring an account activates its disabled shops. Listings and courier availability are not restored automatically. |
+| `trg_verify_product_review_purchase` | BEFORE INSERT/UPDATE on product reviews: requires a customer with a delivered purchase of that exact listing; stamps modification time. |
+| `trg_verify_shop_review_purchase` | BEFORE INSERT/UPDATE on shop reviews: requires a delivered purchase from that shop; stamps modification time. |
+| `trg_check_return_quantity` | Compound INSERT/UPDATE trigger on returns. Collects new rows, then checks delivered order status and sums other non-rejected requests after the statement. Rejects a cumulative quantity exceeding the purchased quantity. |
+| `trg_guard_order_transition` | BEFORE UPDATE on orders: allows pending → shipped/cancelled and shipped → pending/delivered. Unchanged status is allowed; other changes raise an error. |
+
+`incomplete_masters` is a view exposing available masters missing required values.
+`saveMaster` and `saveCategory` query it before committing and reject incomplete
+changes. Oracle does not have the old deferred constraint triggers: this specific
+rule is enforced by the API, **not by arbitrary direct SQL writes**.
+
+### `settle_delivery(p_order_id IN NUMBER, p_courier_id IN NUMBER, p_result OUT CLOB)`
+
+The delivery controller calls this procedure through an anonymous PL/SQL block,
+binding the authenticated courier ID and a CLOB output. The caller owns commit
+and rollback; the procedure never commits independently.
+
+1. Guarded UPDATE changes an assigned shipped order to delivered. `SQL%ROWCOUNT`
+   is checked immediately: no matched row returns a null result without crediting
+   anyone. Oracle does not raise `NO_DATA_FOUND` for an UPDATE matching zero rows.
+2. Pending payment becomes completed, dated from the order's delivery timestamp.
+3. Courier earnings increase by the order's stored delivery charge.
+4. Each shop's balance increases by the full subtotal of its own order lines.
+5. SQL `JSON_OBJECT ... RETURNING CLOB` produces the result, including payment
+   and courier details. The adapter consumes the LOB before closing the connection.
+
+The delivery charge is `ROUND(3 + 0.02 * goods_total, 2)`, calculated at checkout
+and stored. There is no commission. For goods worth 100.00, the customer owes
+105.00, the shop receives 100.00 and the courier receives 5.00 at delivery.
+
+### Indexes and important SQL patterns
+
+Primary and unique constraints create their own supporting indexes. Additional
+indexes cover customer/status orders, courier/status orders, order-item products,
+shop/master listings, vendor refunds by shop/date and date, shop top-ups, and
+returns by order/product, shop/date and pickup status/date.
+`idx_product_returns_open` is a function-based unique index: CASE expressions
+produce the order/product pair for requested, approved and collected returns;
+closed requests produce null keys. This allows another request after rejection
+while preventing two open requests for the same line.
+
+- Catalog queries join listings, shops, masters and categories; recursive category
+  scopes include descendants. Repeated attribute filters use one EXISTS per
+  attribute, OR within its values and AND across attributes.
+- Paginated queries use `COUNT(*) OVER()` with `OFFSET ... FETCH NEXT`. Sort SQL
+  comes from a whitelist; search text is bound and LIKE metacharacters are escaped.
+- Stock claims put availability and sufficient quantity in the UPDATE predicate.
+  Locks survive until commit or rollback, so a competing write must recheck stock.
+- Refund attribution uses a windowed SUM of newer wholesale quantities to determine
+  how much of each purchase remains. It allocates stock newest-first and uses the
+  current wholesale price only for units without purchase history. For 7 units
+  backed by 3 units at 9 and older units at 6, compensation is 3×9 + 4×6 = 51.
+  The stored average unit amount is rounded; the ledger amount is authoritative.
+- Customer-return approval changes status, debits the shop and inserts a customer
+  refund in one transaction. Pickup changes custody; restock adds inventory only
+  after the vendor confirms receipt.
 
 ## Database rules that matter
 
@@ -397,15 +484,17 @@ up to more than the customer bought.
   only the purchased cart rows. Concurrent checkout cannot purchase those same
   rows twice, and newly added different products remain in the cart. Prices are
   read at checkout; opening the cart does not lock a price. Payment totals are
-  added in PostgreSQL using decimal arithmetic.
+  added in the database using its decimal `NUMBER` arithmetic.
 - **The money:** the customer's payment is `total_amount + delivery_cost`. The
   goods go to the shops and the delivery charge goes to the courier, in full. No
   commission is taken anywhere, and `shops.balance` can be spent on wholesale
   stock at the master's `wholesale_price`.
-- **Delivery:** assigns an available courier whose user account is active, or
-  leaves the order unassigned. Status changes compare the expected current state.
-  Delivery completes the pending cash payment, credits the courier the order's own
-  delivery cost, and credits each shop for its lines — all once, in one procedure.
+- **Delivery:** an order is placed belonging to nobody and goes on an open board
+  that every available courier with an active account can see. One of them claims
+  it, first accept wins, and only the claimer can then move it. Status changes
+  compare the expected current state. Delivery completes the pending cash payment,
+  credits the courier the order's own delivery cost, and credits each shop for its
+  lines — all once, in one procedure.
 - **Cancellation:** database trigger restores stock, unassigns the courier and
   fails the pending payment. Only pending orders can be cancelled.
 - **Returns:** a customer may ask to return any line of a **delivered** order, in
@@ -421,9 +510,9 @@ up to more than the customer bought.
 - **Database enforcement:** triggers prevent hard deletion of historical entities,
   cascade account/shop disabling, release a courier's orders when unavailable,
   recalculate order totals, constrain order transitions, cap return quantities,
-  and require delivered purchases for reviews. Deferred category-value triggers
-  check required master attributes at commit. These protections also apply to
-  direct SQL writes.
+  and require delivered purchases for reviews. Required category values are checked
+  by the admin API through `incomplete_masters` before commit; that rule does not
+  protect arbitrary direct SQL writes.
 - **Sessions:** bcrypt hashes passwords; JWTs carry user ID and token version.
   Logout/status changes increment `users.token_version`. Each protected request
   reloads the user so disabling an account takes effect immediately.
@@ -437,9 +526,9 @@ Paths below are relative to `server/` unless specified otherwise.
 | `package.json` | API dependencies and start/watch/database/test commands. Root `package-lock.json` locks both workspaces. |
 | `.env.example` | Configuration template: database connection, port, JWT secret, allowed browser origins and logging. `.env` is local and ignored. |
 | `README.md` | Backend setup entry point. |
-| `scripts/init.js` | Takes an advisory lock, refuses non-empty schemas, loads `sql/schema.sql` atomically. |
-| `scripts/seed.js` | Loads the demo SQL transactionally under an advisory lock; rejects production mode and preserves matching existing demo rows. |
-| `sql/schema.sql` | Complete fresh-database definition: 24 tables, 14 functions, 20 triggers, one procedure, 10 indexes. |
+| `scripts/init.js` | Creates missing schema objects; `--resume` permits recovery only when existing application tables are empty. DDL commits independently. Checks stored-program compilation errors. |
+| `scripts/seed.js` | Loads both demo SQL files in one transaction; rejects production mode and preserves matching existing demo rows. |
+| `sql/schema.sql` | Complete fresh-database definition: 24 application tables, one computed function, two procedures, 17 triggers, one view and 11 explicit indexes. |
 | `sql/test_insert/seed_demo.sql` | Demo countries/roles/accounts/catalog/orders/reviews, purchase history, and the shop funding that makes each seeded balance reconcile with its purchases. |
 | `sql/test_insert/seed_extended.sql` | Larger repeatable catalog, accounts, orders, payments, reviews and refunds; loaded after the base seed and composable with it. |
 | `tests/schema.integration.test.js` | Verifies the consolidated schema, seed counts, monetary consistency and safe reseeding. |
@@ -453,12 +542,12 @@ Paths below are relative to `server/` unless specified otherwise.
 | `tests/refund.integration.test.js` | Refund attribution, exactly-once removal and admin removal previews. |
 | `tests/returns.integration.test.js` | The balance identity, each return transition happening exactly once, the cumulative-quantity cap, and the statistics reconciling with the balance. |
 | Root `scripts/dev.js` | Starts client and backend together for development. |
-| Root `scripts/document-schema.py` | Generates `docs/SCHEMA.md` from the schema without connecting to PostgreSQL. |
+| Root `scripts/document-schema.py` | Generates `docs/SCHEMA.md` from the schema without connecting to the database. |
 
 From the repository root: `npm run db:init` for a **new empty database**,
 `npm run db:seed` for the original and expanded demo data, `npm run dev:server`
 for the API, and `npm test` for regressions. Tests use disposable schemas and need
-schema-creation permission. The migration runner and incremental SQL files have
+permission to create and drop disposable Oracle users and their objects. The migration runner and incremental SQL files have
 been removed; schema changes now live directly in `schema.sql`. Existing databases
 are not rewritten by init and are not automatically upgraded.
 
@@ -471,5 +560,4 @@ ID. Errors roll back the entire workflow.
 See [CHECKLIST.md](CHECKLIST.md) for requirement-by-requirement findings and
 [DEMO_DATA.md](DEMO_DATA.md) for the expanded fixture and demo credentials.
 
-Detailed references: [schema and ERD](SCHEMA.md), [order/payment rules](ORDERS_AND_PAYMENT.md),
-[vendor refunds and returns](REFUNDS_AND_READ_SURFACES.md), [setup and workflows](WEBSITE_FLOW.md).
+Detailed column definitions and relationships: [schema and ERD](SCHEMA.md).

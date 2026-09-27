@@ -318,6 +318,15 @@ test("the courier's run offers only the move that is legal for each order", asyn
     advanced = true;
     return route.fulfill({ json: { message: "Order marked as shipped." } });
   });
+  // The run is what this test is about, so the board and the pickups below it
+  // are empty — but they are answered, because a page under test should not be
+  // showing "route not found" where the real page has a section.
+  await page.route("**/api/delivery/open-orders", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/api/delivery/returns", (route) =>
+    route.fulfill({ json: [] }),
+  );
 
   await page.goto("/delivery/deliveries");
   const first = page.locator(".order-card").filter({ hasText: "Order #7" });
@@ -334,4 +343,63 @@ test("the courier's run offers only the move that is legal for each order", asyn
     first.getByRole("button", { name: "Mark delivered" }),
   ).toBeVisible();
   expect(put).toEqual({ order_status: "shipped" });
+});
+
+test("the board offers an unclaimed order, and accepting it puts it on the run", async ({
+  page,
+}) => {
+  await mockApi(page, {
+    user_id: 4,
+    name: "Courier",
+    email: "delivery@example.test",
+    role: "delivery",
+  });
+  // The board advertises the trip's pay and the cash to collect, and nothing
+  // about who the customer is. The run below carries the contact details, so
+  // seeing them after the accept is what proves where the card came from.
+  const offered = {
+    ...order,
+    order_id: 9,
+    delivery_cost: "3.40",
+    payment_amount: "23.40",
+    items: [{ prod_id: 1, name: "Keyboard", shop_name: "Shop", quantity: 2 }],
+  };
+  let claimMethod = null;
+  let run = [];
+  await page.route("**/api/delivery/open-orders", (route) =>
+    // Claimed orders leave the board, so the reload after the accept is empty.
+    route.fulfill({ json: claimMethod ? [] : [offered] }),
+  );
+  await page.route("**/api/delivery/deliveries", (route) =>
+    route.fulfill({ json: run }),
+  );
+  await page.route("**/api/delivery/returns", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/api/delivery/orders/9/claim", (route) => {
+    claimMethod = route.request().method();
+    run = [{ ...offered, customer_name: "Customer", customer_phone: "+100" }];
+    return route.fulfill({ json: { message: "Order #9 is yours." } });
+  });
+
+  await page.goto("/delivery/deliveries");
+
+  const card = page.locator(".order-card").filter({ hasText: "Order #9" });
+  await expect(card).toContainText("1 Test Street");
+  // What the trip pays, and what is collected at the door.
+  await expect(card).toContainText("$3.40");
+  await expect(card).toContainText("$23.40");
+  // Nobody takes a job on who the customer is, because who it is is not shown.
+  await expect(card).not.toContainText("Customer");
+
+  await card.getByRole("button", { name: "Accept this delivery" }).click();
+
+  // One card for the same order, not two: it has left the board and joined the
+  // run, and it is the run's card, because only that one knows the customer.
+  const moved = page.locator(".order-card").filter({ hasText: "Order #9" });
+  await expect(moved).toHaveCount(1);
+  await expect(moved).toContainText("Customer");
+  await expect(moved).toContainText("+100");
+  await expect(moved.getByRole("button", { name: "Mark collected" })).toBeVisible();
+  expect(claimMethod).toBe("PUT");
 });
