@@ -25,6 +25,7 @@ const NEXT_STEP = {
 // server allows any active courier to take one.
 function ReturnPickups({ pickups, onCollected }) {
   const task = useTask();
+  const items = pickups.data ?? [];
 
   async function collect(item) {
     const ok = await task.run(() =>
@@ -40,14 +41,14 @@ function ReturnPickups({ pickups, onCollected }) {
       <Feedback error={task.error} message={task.message} />
       {pickups.isLoading ? (
         <p role="status">Loading pickups...</p>
-      ) : pickups.data?.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="empty-state">
           No parcels are waiting to be picked up. A return appears here once the
           shop has accepted it.
         </div>
       ) : (
         <div className="order-list">
-          {pickups.data.map((item) => (
+          {items.map((item) => (
             <article className="order-card" key={item.return_id}>
               <div className="order-card-head">
                 <div>
@@ -111,8 +112,71 @@ function ReturnPickups({ pickups, onCollected }) {
   );
 }
 
+function OpenBoard({ board, onClaimed }) {
+  const task = useTask();
+  const offers = board.data ?? [];
+
+  async function claim(order) {
+    const ok = await task.run(() =>
+      api(`/delivery/orders/${order.order_id}/claim`, { method: "PUT" }),
+    );
+    if (ok) onClaimed();
+  }
+
+  return (
+    <>
+      <h2>Waiting for a courier</h2>
+      <Feedback error={task.error || board.error} message={task.message} />
+      {board.isLoading ? (
+        <p role="status">Loading the board...</p>
+      ) : offers.length === 0 ? (
+        <div className="empty-state">No orders are waiting for a courier.</div>
+      ) : (
+        <div className="order-list">
+          {offers.map((order) => (
+            <article className="order-card" key={order.order_id}>
+              <div className="order-card-head">
+                <div>
+                  <h3>Order #{order.order_id}</h3>
+                  <p className="muted">
+                    Placed {new Date(order.created_at).toLocaleString()}
+                  </p>
+                </div>
+                <OrderStatus order={order} />
+              </div>
+              <dl className="order-facts">
+                <div>
+                  <dt>Deliver to</dt>
+                  <dd>
+                    {[order.street_address, order.city, order.state_province, order.postal_code]
+                      .filter(Boolean)
+                      .join(", ")}
+                  </dd>
+                </div>
+                <div><dt>You are paid</dt><dd>${order.delivery_cost}</dd></div>
+                <div><dt>Collect cash</dt><dd>${order.payment_amount}</dd></div>
+              </dl>
+              <ul className="checkout-lines">
+                {(order.items ?? []).map((item) => (
+                  <li key={item.prod_id}>
+                    <span>{item.name} <span className="muted">× {item.quantity} · {item.shop_name}</span></span>
+                  </li>
+                ))}
+              </ul>
+              <button className="primary" disabled={task.busy} onClick={() => claim(order)}>
+                Accept this delivery
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function DeliveriesPage() {
   const deliveries = useResource("/delivery/deliveries");
+  const board = useResource("/delivery/open-orders");
   const pickups = useResource("/delivery/returns");
   const task = useTask();
   // Which order the in-flight request belongs to, so only that card's button
@@ -136,7 +200,7 @@ export default function DeliveriesPage() {
   }
 
   return (
-    <main className="content" aria-busy={deliveries.isLoading || task.busy}>
+    <main className="content" aria-busy={deliveries.isLoading || board.isLoading || task.busy}>
       <div className="page-heading">
         <div>
           <p className="eyebrow">Delivery</p>
@@ -151,8 +215,7 @@ export default function DeliveriesPage() {
         <p role="status">Loading your deliveries...</p>
       ) : orders.length === 0 ? (
         <div className="empty-state">
-          Nothing is assigned to you right now. Orders are handed out as they are
-          placed, so check back later.
+          Nothing is yours right now. Accept an order from the board below.
         </div>
       ) : (
         <div className="order-list">
@@ -228,6 +291,14 @@ export default function DeliveriesPage() {
           })}
         </div>
       )}
+
+      <OpenBoard
+        board={board}
+        onClaimed={() => {
+          board.reload();
+          deliveries.reload();
+        }}
+      />
 
       <ReturnPickups pickups={pickups} onCollected={pickups.reload} />
     </main>

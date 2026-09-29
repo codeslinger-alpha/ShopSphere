@@ -42,7 +42,14 @@ async function resolveShippingAddress(client, userId, body) {
 async function placeOrder(req, res) {
   const userId = req.user.user_id;
   const order = await transaction(async (client) => {
-    const cart = (await client.query(q.CART_FOR_ORDER, [userId])).rows;
+    // Snapshot the cart before waiting for its row locks. Items added while a
+    // checkout is waiting belong to the customer's next order, not this one.
+    const productIds = (
+      await client.query(q.CART_PRODUCT_IDS, [userId])
+    ).rows.map((row) => row.prod_id);
+    const cart = (
+      await client.query(q.CART_FOR_ORDER, [userId, productIds])
+    ).rows;
     if (cart.length === 0)
       v.fail(400, "Your cart is empty. Add something to it before checking out.");
 
@@ -62,16 +69,10 @@ async function placeOrder(req, res) {
     }
 
     const shippingAddress = await resolveShippingAddress(client, userId, req.body || {});
-    // Nobody available is a legitimate outcome, not a failure: the order waits
-    // unassigned, exactly as the seeded pending order does.
-    const courier = (await client.query(q.FIND_AVAILABLE_COURIER)).rows[0];
-
+    // A courier claims an order from the open board after it is placed. This
+    // keeps an order visible when nobody was available at checkout time.
     const created = (
-      await client.query(q.CREATE_ORDER, [
-        userId,
-        shippingAddress,
-        courier ? courier.delivery_person_id : null,
-      ])
+      await client.query(q.CREATE_ORDER, [userId, shippingAddress])
     ).rows[0];
 
     for (const item of cart) {
@@ -187,6 +188,37 @@ async function listDeliveries(req, res) {
   return res.json(orders);
 }
 
+async function listOpenOrders(req, res) {
+  const orders = (
+    await pool.query(q.LIST_OPEN_ORDERS, [req.user.user_id])
+  ).rows;
+
+  if (orders.length) {
+    const items = (
+      await pool.query(q.GET_ITEMS_FOR_ORDERS, [
+        orders.map((order) => order.order_id),
+      ])
+    ).rows;
+    for (const order of orders)
+      order.items = items.filter((item) => item.order_id === order.order_id);
+  }
+
+  return res.json(orders);
+}
+
+async function claimOrder(req, res) {
+  const orderId = v.id(req.params.orderId, "Order");
+  const order = (
+    await transaction.query(q.CLAIM_ORDER, [orderId, req.user.user_id])
+  ).rows[0];
+  if (!order) v.fail(409, "That order is no longer available to take.");
+
+  return res.json({
+    message: `Order #${order.order_id} is yours. Collect the parcel and mark it shipped.`,
+    order,
+  });
+}
+
 async function advanceDelivery(req, res) {
   const orderId = v.id(req.params.orderId, "Order");
   const target = req.body?.order_status;
@@ -226,4 +258,13 @@ async function advanceDelivery(req, res) {
   });
 }
 
-module.exports = { advanceDelivery, cancelOrder, getOrder, listDeliveries, listOrders, placeOrder };
+module.exports = {
+  advanceDelivery,
+  cancelOrder,
+  claimOrder,
+  getOrder,
+  listDeliveries,
+  listOpenOrders,
+  listOrders,
+  placeOrder,
+};

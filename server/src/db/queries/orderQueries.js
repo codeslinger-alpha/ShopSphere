@@ -7,6 +7,9 @@ const COURIER_RATE = 0.02;
 
 // Lock the cart rows so concurrent checkouts cannot buy the same cart twice.
 // Stable product order also gives stock claims a consistent lock order.
+const CART_PRODUCT_IDS = `
+    SELECT prod_id FROM cart_items WHERE user_id = $1 ORDER BY prod_id
+`;
 const CART_FOR_ORDER = `
     SELECT c.prod_id, c.quantity, p.name, p.unit_price, p.in_stock,
            s.name AS shop_name
@@ -14,7 +17,7 @@ const CART_FOR_ORDER = `
     JOIN products p ON p.prod_id = c.prod_id
     JOIN shops s ON s.shop_id = p.shop_id
     JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
-    WHERE c.user_id = $1
+    WHERE c.user_id = $1 AND c.prod_id = ANY($2::int[])
     ORDER BY c.prod_id
     FOR UPDATE OF c
 `;
@@ -45,23 +48,10 @@ const CLAIM_FAILURE_DETAIL = `
     WHERE p.prod_id = $1
 `;
 
-// Assign the active, available courier with fewest open orders; ID breaks ties.
-const FIND_AVAILABLE_COURIER = `
-    SELECT d.delivery_person_id
-    FROM delivery_personnel d
-    JOIN users u ON u.user_id = d.delivery_person_id AND u.active_status = 'active'
-    LEFT JOIN orders o ON o.delivery_person_id = d.delivery_person_id
-         AND o.order_status IN ('pending', 'shipped')
-    WHERE d.active_status = 'available'
-    GROUP BY d.delivery_person_id
-    ORDER BY COUNT(o.order_id), d.delivery_person_id
-    LIMIT 1
-`;
-
-// The order-item trigger owns total_amount. No available courier means NULL.
+// The order-item trigger owns total_amount. A courier claims it afterwards.
 const CREATE_ORDER = `
     INSERT INTO orders (user_id, shipping_address, delivery_person_id)
-    VALUES ($1, $2, $3)
+    VALUES ($1, $2, NULL)
     RETURNING order_id, order_status, delivery_person_id, shipping_address,
               delivery_cost, created_at
 `;
@@ -197,6 +187,37 @@ const LIST_DELIVERIES_FOR_COURIER = `
     ORDER BY o.created_at, o.order_id
 `;
 
+// Pending orders are visible only to active couriers currently on duty. The
+// guarded claim below makes accepting one safe when two couriers race for it.
+const LIST_OPEN_ORDERS = `
+    SELECT ${ORDER_SUMMARY_COLUMNS}
+    ${ORDER_SUMMARY_JOINS}
+    WHERE o.delivery_person_id IS NULL AND o.order_status = 'pending'
+      AND EXISTS (
+        SELECT 1
+        FROM delivery_personnel d
+        JOIN users u ON u.user_id = d.delivery_person_id
+        WHERE d.delivery_person_id = $1
+          AND d.active_status = 'available'
+          AND u.active_status = 'active'
+      )
+    ${ORDER_SUMMARY_GROUP_BY}
+    ORDER BY o.created_at, o.order_id
+`;
+
+const CLAIM_ORDER = `
+    UPDATE orders o SET delivery_person_id = $2
+    FROM delivery_personnel d
+    JOIN users u ON u.user_id = d.delivery_person_id
+    WHERE o.order_id = $1
+      AND o.delivery_person_id IS NULL
+      AND o.order_status = 'pending'
+      AND d.delivery_person_id = $2
+      AND d.active_status = 'available'
+      AND u.active_status = 'active'
+    RETURNING o.order_id, o.order_status, o.delivery_person_id
+`;
+
 // Shipping is a single guarded write; delivery uses the multi-table procedure.
 const SHIP_ORDER = `
     UPDATE orders SET order_status = 'shipped'
@@ -225,10 +246,12 @@ const GET_ASSIGNED_ORDER = `
 `;
 
 module.exports = {
+  CART_PRODUCT_IDS,
   SHIP_ORDER,
   CANCEL_ORDER,
   CART_FOR_ORDER,
   CLAIM_FAILURE_DETAIL,
+  CLAIM_ORDER,
   CLAIM_STOCK,
   CLEAR_CART,
   SETTLE_DELIVERY,
@@ -237,13 +260,13 @@ module.exports = {
   CREATE_ORDER,
   CREATE_ORDER_ITEM,
   CREATE_PAYMENT,
-  FIND_AVAILABLE_COURIER,
   GET_ASSIGNED_ORDER,
   GET_ITEMS_FOR_ORDERS,
   GET_ORDER_BY_USER,
   GET_ORDER_ITEMS,
   GET_ORDER_STATUS,
   LIST_DELIVERIES_FOR_COURIER,
+  LIST_OPEN_ORDERS,
   LIST_ORDERS_BY_USER,
   ORDER_TOTALS,
   RECORD_DELIVERY_COST,

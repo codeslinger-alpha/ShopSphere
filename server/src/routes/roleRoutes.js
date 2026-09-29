@@ -103,6 +103,8 @@ router.put("/delivery/profile", role.updateDeliveryStatus);
 // guard rather than the customer one in orderRoutes.js.
 router.get("/delivery/deliveries", order.listDeliveries);
 router.put("/delivery/orders/:orderId/status", order.advanceDelivery);
+router.get("/delivery/open-orders", order.listOpenOrders);
+router.put("/delivery/orders/:orderId/claim", order.claimOrder);
 // The pickups: approved returns waiting for a courier, and the one transition
 // that takes one off that list.
 router.get("/delivery/returns", returns.forCourier);

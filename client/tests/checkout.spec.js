@@ -335,3 +335,56 @@ test("the courier's run offers only the move that is legal for each order", asyn
   ).toBeVisible();
   expect(put).toEqual({ order_status: "shipped" });
 });
+
+test("a courier can claim an open order and then see it on their run", async ({
+  page,
+}) => {
+  const courier = {
+    user_id: 4,
+    name: "Courier",
+    email: "delivery@example.test",
+    role: "delivery",
+  };
+  await mockApi(page, courier);
+  const offered = {
+    ...order,
+    order_id: 9,
+    delivery_cost: "3.40",
+    payment_amount: "23.40",
+    items: [{ prod_id: 1, name: "Keyboard", shop_name: "Shop", quantity: 2 }],
+  };
+  let claimed = false;
+  await page.route("**/api/delivery/open-orders", (route) =>
+    route.fulfill({ json: claimed ? [] : [offered] }),
+  );
+  await page.route("**/api/delivery/deliveries", (route) =>
+    route.fulfill({
+      json: claimed
+        ? [{ ...offered, customer_name: "Customer", customer_phone: "+100" }]
+        : [],
+    }),
+  );
+  await page.route("**/api/delivery/returns", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/api/delivery/orders/9/claim", (route) => {
+    expect(route.request().method()).toBe("PUT");
+    claimed = true;
+    return route.fulfill({ json: { message: "Order #9 is yours." } });
+  });
+
+  await page.goto("/delivery/deliveries");
+  const card = page.locator(".order-card").filter({ hasText: "Order #9" });
+  await expect(card).toContainText("$3.40");
+  await expect(card).not.toContainText("Customer");
+  await card.getByRole("button", { name: "Accept this delivery" }).click();
+
+  const claimedCard = page
+    .locator(".order-card")
+    .filter({ hasText: "Order #9" });
+  await expect(claimedCard).toHaveCount(1);
+  await expect(claimedCard).toContainText("Customer");
+  await expect(
+    claimedCard.getByRole("button", { name: "Mark collected" }),
+  ).toBeVisible();
+});
