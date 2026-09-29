@@ -7,8 +7,9 @@ transactions and authentication middleware. Express serves `/api/...` only.
 
 Run commands from the repository root: `npm install`, `npm run dev:server`.
 Configure `server/.env` from `.env.example`. Use `npm run db:init` for a new empty
-database, followed by `npm run db:seed` for local demo data. Init refuses existing
-tables. The demo seed preserves matching accounts, inventory and earnings.
+database, followed by `npm run db:seed` for local demo data. After every schema
+change, use `npm run db:reset` to recreate the public schema and load both demo
+datasets. Reset deletes the application's existing data.
 
 [Backend file, API and database guide](../docs/BACKEND.md)
 

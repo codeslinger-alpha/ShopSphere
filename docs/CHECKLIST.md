@@ -112,8 +112,6 @@ The predecessor run reported:
 Database checks ran in disposable schemas; they did not initialize or reseed the
 application's existing tables.
 
-**The configured database has not been migrated.** The authoritative schema is
-`server/sql/schema.sql`, and the migration runner was deliberately removed, so
-the suite can be green while the configured database is stale — a silent
-failure mode. A fresh database built with `npm run db:init` and `npm run db:seed`
-is required to exercise this work.
+The authoritative schema is `server/sql/schema.sql`. Run `npm run db:reset`
+after changing it to recreate the configured development database and load the
+demo data.

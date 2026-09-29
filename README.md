@@ -11,9 +11,10 @@ See the [current checklist review](docs/CHECKLIST.md), [demo dataset](docs/DEMO_
 
 From this directory, install dependencies once with `npm install`.
 Configure `server/.env` from `server/.env.example` and create a PostgreSQL database.
-For a **new empty database**, run `npm run db:init`. All definitions are in
-`server/sql/schema.sql`; there is no separate migration step. Init refuses to
-overwrite existing tables. Then `npm run db:seed` adds the expanded demo dataset and
+For a **new empty database**, run `npm run db:init`, then `npm run db:seed`.
+All definitions are in `server/sql/schema.sql`; there are no migration files.
+After every schema change, run `npm run db:reset` to recreate the public schema
+and populate both demo datasets. It deletes the application's existing data.
 `npm run dev` starts the API on port 5000 and website on port 5173.
 
 `npm run build`, `npm run lint`, `npm test`, and `npm run test:e2e` run validation.
