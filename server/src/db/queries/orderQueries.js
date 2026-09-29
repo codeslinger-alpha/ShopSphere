@@ -73,9 +73,11 @@ const RECORD_DELIVERY_COST = `
     RETURNING delivery_cost
 `;
 
-// The trigger has run by now, so this is the authoritative total.
+// The trigger has run by now, so this stored column is authoritative. Reading
+// it avoids depending on a helper function that older initialized databases may
+// not contain.
 const ORDER_TOTALS = `
-    SELECT fn_order_subtotal(order_id) AS total_amount, delivery_cost FROM orders WHERE order_id = $1
+    SELECT total_amount, delivery_cost FROM orders WHERE order_id = $1
 `;
 
 // paid_at is set explicitly to NULL. The column defaults to CURRENT_TIMESTAMP,
