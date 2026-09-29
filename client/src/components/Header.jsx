@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Avatar from "./Avatar";
 import { useAuth } from "../auth/useAuth";
 import { useCartCount } from "../hooks/useCartCount";
 import { useTheme } from "../hooks/useTheme";
@@ -135,7 +136,10 @@ export default function Header() {
               action, it is in every category tile, and the search box above
               submits straight to it. A nav entry only restated the search field
               that sits beside it. */}
-          {user && <Link to="/profile">Account settings</Link>}
+          {user && <Link to="/profile" className="account-link">
+            <Avatar key={user.pfp} name={user.name} src={user.pfp} decorative />
+            Account settings
+          </Link>}
           {user?.role === "customer" && (
             <Link to="/cart">
               Cart

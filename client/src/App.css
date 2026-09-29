@@ -1833,3 +1833,33 @@ button.danger:hover:not(:disabled) {
     gap: 0.85rem;
   }
 }
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--brand-100);
+  color: var(--brand-700);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.avatar-large {
+  width: 5rem;
+  height: 5rem;
+  font-size: 1.5rem;
+}
+.account-link,
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.profile-identity {
+  margin-bottom: 1rem;
+  font-weight: 600;
+}

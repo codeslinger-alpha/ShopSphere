@@ -104,6 +104,7 @@ function publicUser(user) {
     user_id: user.user_id,
     name: user.name,
     email: user.email,
+    pfp: user.pfp || null,
     role: user.role_name,
   };
 }

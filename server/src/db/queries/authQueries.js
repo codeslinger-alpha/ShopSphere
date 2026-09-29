@@ -1,5 +1,5 @@
 const FIND_AUTH_USER_BY_ID = `
-    SELECT u.user_id, u.name, u.email, u.active_status, u.token_version,
+    SELECT u.user_id, u.name, u.email, u.pfp, u.active_status, u.token_version,
            r.role_id, r.role_name
     FROM users u
     JOIN roles r ON r.role_id = u.user_role
@@ -20,7 +20,7 @@ const CREATE_LOCATION = `
 const CREATE_USER = `
     INSERT INTO users (user_role, name, password_hash, email, phone_numbers, pfp, address)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING user_id, name, email, token_version
+    RETURNING user_id, name, email, pfp, token_version
 `;
 
 const CREATE_DELIVERY_PERSONNEL = `
@@ -29,7 +29,7 @@ const CREATE_DELIVERY_PERSONNEL = `
 `;
 
 const FIND_USER_BY_EMAIL = `
-    SELECT u.user_id, u.name, u.email, u.password_hash, u.active_status, u.token_version,
+    SELECT u.user_id, u.name, u.email, u.pfp, u.password_hash, u.active_status, u.token_version,
            r.role_name
     FROM users u
     JOIN roles r ON r.role_id = u.user_role

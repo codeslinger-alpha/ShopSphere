@@ -2,6 +2,7 @@ import { useAuth } from "../auth/useAuth";
 import { api } from "../api/http";
 import { useResource, useTask } from "../hooks/useResource";
 import { ContactFields, Feedback } from "../components/FormFields";
+import Avatar from "../components/Avatar";
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth(),
     resource = useResource("/profile"),
@@ -25,6 +26,10 @@ export default function ProfilePage() {
       <Feedback error={task.error || resource.error} message={task.message} />
       {p ? (
         <>
+          <div className="profile-identity">
+            <Avatar key={p.pfp} name={p.name} src={p.pfp} large />
+            <span>{p.name}</span>
+          </div>
           <form
             className="panel form"
             key={`${p.email}:${p.street_address}`}
