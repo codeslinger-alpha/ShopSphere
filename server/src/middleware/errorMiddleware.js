@@ -1,4 +1,5 @@
 const { loggingEnabled } = require("../utils/logging");
+const { cyan, status } = require("../utils/color");
 
 function errorHandler(error, req, res, next) {
   if (res.headersSent) return next(error);
@@ -8,15 +9,15 @@ function errorHandler(error, req, res, next) {
   // would show up as a bare number, with nothing saying which rule was broken.
   // Naming the reason is the difference between a terminal that explains itself
   // and one that only reports that something failed.
-  const reject = (status, message) => {
+  const reject = (code, message) => {
     // The 500 path below always logs: an unexpected failure is worth seeing even
     // where request logging is turned off. A 4xx is routine traffic — the API
     // answers plenty of them by design — so it follows the same switch.
     if (loggingEnabled("LOG_REQUESTS"))
       console.error(
-        `[api] ${status} ${req.method} ${req.originalUrl} — ${message}`,
+        `${cyan("[api]")} ${status(code)} ${req.method} ${req.originalUrl} — ${message}`,
       );
-    return res.status(status).json({ message });
+    return res.status(code).json({ message });
   };
 
   if (error.status && error.status >= 400 && error.status < 500 && !error.type)
@@ -35,7 +36,7 @@ function errorHandler(error, req, res, next) {
     return reject(400, "Request body must contain valid JSON.");
   if (error.type === "entity.too.large")
     return reject(413, "Request body is too large.");
-  console.error(`[api] 500 ${req.method} ${req.originalUrl}`);
+  console.error(`${cyan("[api]")} ${status(500)} ${req.method} ${req.originalUrl}`);
   console.error("Unhandled request error:", error);
   return res
     .status(500)

@@ -5,9 +5,11 @@
 // Set LOG_REQUESTS=false to quiet it; the integration test scripts do, since the
 // suite fires hundreds of requests of its own.
 const { loggingEnabled } = require("../utils/logging");
+const { cyan, dim, status } = require("../utils/color");
 
-// The status picks the stream, which is what gives errors their colour in the VS
-// Code terminal and lets `npm run dev 2>&1 | grep` isolate failures.
+// The status picks the stream, which is what lets `npm run dev 2>&1 | grep`
+// isolate failures, and picks the colour, so the one number worth scanning for
+// is the one that stands out.
 function requestLogger(req, res, next) {
   if (!loggingEnabled("LOG_REQUESTS")) return next();
   const startedAt = process.hrtime.bigint();
@@ -18,7 +20,7 @@ function requestLogger(req, res, next) {
     // The session is set by requireAuth, which runs after this, so on a public
     // route there is simply no user to name.
     const user = req.user ? ` user=${req.user.user_id}` : "";
-    const line = `[api] ${res.statusCode} ${req.method} ${req.originalUrl} ${milliseconds}ms${user}`;
+    const line = `${cyan("[api]")} ${status(res.statusCode)} ${req.method} ${req.originalUrl} ${dim(`${milliseconds}ms`)}${user}`;
     if (res.statusCode >= 500) console.error(line);
     else if (res.statusCode >= 400) console.warn(line);
     else console.log(line);
