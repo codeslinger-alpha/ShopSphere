@@ -494,8 +494,9 @@ FOR EACH ROW
 WHEN (NEW.active_status = 'active' AND OLD.active_status IS DISTINCT FROM 'active')
 EXECUTE FUNCTION fn_enable_user_dependents();
 
+
 -- A completed delivery is the proof of purchase for a product review.
-CREATE FUNCTION fn_verify_product_review_purchase()
+ CREATE FUNCTION fn_verify_product_review_purchase()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NOT EXISTS (
@@ -516,7 +517,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_verify_product_review_purchase();
 
 -- The same rule for shop reviews: a delivered order containing one of the
 -- shop's listings is the proof of purchase.
-CREATE FUNCTION fn_verify_shop_review_purchase()
+ CREATE FUNCTION fn_verify_shop_review_purchase()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NOT EXISTS (
@@ -539,6 +540,7 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_verify_shop_review_purchase
 BEFORE INSERT OR UPDATE ON shop_reviews
 FOR EACH ROW EXECUTE FUNCTION fn_verify_shop_review_purchase();
+
 
 -- What a customer may return, and how much of it.
 --
@@ -625,6 +627,7 @@ CREATE CONSTRAINT TRIGGER trg_category_required_values AFTER INSERT OR UPDATE ON
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fn_require_category_values();
 CREATE CONSTRAINT TRIGGER trg_attribute_required_values AFTER INSERT OR UPDATE OR DELETE ON attribute_values
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fn_require_category_values();
+
 
 CREATE INDEX idx_orders_user_status ON orders(user_id, order_status);
 CREATE INDEX idx_order_items_product ON order_items(prod_id);
