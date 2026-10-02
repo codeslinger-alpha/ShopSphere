@@ -161,6 +161,20 @@ const LIST_OWNED_SALES = `
     WHERE s.owner = $1
     ORDER BY o.created_at DESC, oi.order_id DESC, oi.prod_id
 `;
+const LIST_OWNED_SALES_FOR_SHOP = `
+    SELECT oi.order_id, oi.prod_id, oi.quantity,
+           oi.unit_price::numeric(12,2) AS unit_price,
+           (oi.quantity * oi.unit_price)::numeric(12,2) AS subtotal,
+           o.order_status, o.created_at,
+           p.name AS listing_name,
+           s.shop_id, s.name AS shop_name
+    FROM order_items oi
+    JOIN orders o ON o.order_id = oi.order_id
+    JOIN products p ON p.prod_id = oi.prod_id
+    JOIN shops s ON s.shop_id = p.shop_id
+    WHERE s.owner = $1 AND s.shop_id = $2
+    ORDER BY o.created_at DESC, oi.order_id DESC, oi.prod_id
+`;
 
 // What a vendor has been refunded for stock the platform removed. Same shape as
 // the admin list minus the acting administrator, who is not the vendor's
@@ -179,6 +193,20 @@ const LIST_OWNED_REFUNDS = `
     WHERE s.owner = $1
     ORDER BY vr.refund_id DESC
 `;
+const LIST_OWNED_REFUNDS_FOR_SHOP = `
+    SELECT vr.refund_id, vr.reason, vr.created_at,
+           vr.units, vr.amount::numeric(12,2) AS amount,
+           vr.unit_amount::numeric(12,2) AS unit_amount,
+           s.shop_id, s.name AS shop_name,
+           p.prod_id, p.name AS listing_name,
+           mp.master_prod_id, mp.name AS master_name
+    FROM vendor_refunds vr
+    JOIN shops s ON s.shop_id = vr.shop_id
+    JOIN products p ON p.prod_id = vr.prod_id
+    JOIN master_products mp ON mp.master_prod_id = vr.master_prod_id
+    WHERE s.owner = $1 AND s.shop_id = $2
+    ORDER BY vr.refund_id DESC
+`;
 
 // The running balance the shop spends from. Separate from LIST_OWNED_SHOPS
 // because the payments page wants three numbers per shop, not a shop record.
@@ -186,6 +214,12 @@ const LIST_OWNED_BALANCES = `
     SELECT shop_id, name, balance::numeric(12,2) AS balance, active_status
     FROM shops
     WHERE owner = $1
+    ORDER BY shop_id
+`;
+const LIST_OWNED_BALANCES_FOR_SHOP = `
+    SELECT shop_id, name, balance::numeric(12,2) AS balance, active_status
+    FROM shops
+    WHERE owner = $1 AND shop_id = $2
     ORDER BY shop_id
 `;
 
@@ -217,6 +251,23 @@ const OWNED_TOTALS = `
       (SELECT COALESCE(SUM(s.balance), 0)::numeric(12,2)
        FROM shops s WHERE s.owner = $1) AS balance_total
 `;
+const OWNED_TOTALS_FOR_SHOP = `
+    SELECT
+      (SELECT COALESCE(SUM(sp.quantity * sp.wholesale_unit_price), 0)::numeric(12,2)
+       FROM shop_purchases sp JOIN shops s ON s.shop_id = sp.shop_id
+       WHERE s.owner = $1 AND s.shop_id = $2) AS wholesale_spend,
+      (SELECT COALESCE(SUM(oi.quantity * oi.unit_price), 0)::numeric(12,2)
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       JOIN products p ON p.prod_id = oi.prod_id
+       JOIN shops s ON s.shop_id = p.shop_id
+       WHERE s.owner = $1 AND s.shop_id = $2 AND o.order_status <> 'cancelled') AS gross_sales,
+      (SELECT COALESCE(SUM(vr.amount), 0)::numeric(12,2)
+       FROM vendor_refunds vr JOIN shops s ON s.shop_id = vr.shop_id
+       WHERE s.owner = $1 AND s.shop_id = $2) AS refunds_received,
+      (SELECT COALESCE(SUM(s.balance), 0)::numeric(12,2)
+       FROM shops s WHERE s.owner = $1 AND s.shop_id = $2) AS balance_total
+`;
 
 // =========================================================
 // Customer
@@ -238,10 +289,14 @@ const LIST_OWNED_PAYMENTS = `
 
 module.exports = {
   LIST_OWNED_BALANCES,
+  LIST_OWNED_BALANCES_FOR_SHOP,
   LIST_OWNED_PAYMENTS,
   LIST_OWNED_REFUNDS,
+  LIST_OWNED_REFUNDS_FOR_SHOP,
   LIST_OWNED_SALES,
+  LIST_OWNED_SALES_FOR_SHOP,
   OWNED_TOTALS,
+  OWNED_TOTALS_FOR_SHOP,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   REFUND_REASONS,

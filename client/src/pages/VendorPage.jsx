@@ -8,6 +8,41 @@ import {
   MarkdownField,
   MasterFacts,
 } from "../components/FormFields";
+function VendorProductReviews({ productId }) {
+  const [open, setOpen] = useState(false);
+  const reviews = useResource(
+    open ? `/products/${productId}/reviews` : "",
+  );
+
+  return (
+    <>
+      <button type="button" onClick={() => setOpen((value) => !value)}>
+        {open ? "Hide reviews" : "View reviews"}
+      </button>
+      {open && (
+        <div>
+          {reviews.isLoading ? (
+            <p role="status">Loading reviews…</p>
+          ) : reviews.error ? (
+            <p role="alert">{reviews.error}</p>
+          ) : reviews.data?.length ? (
+            <ul className="stack-list">
+              {reviews.data.map((review) => (
+                <li key={review.user_id}>
+                  <strong>{review.name}</strong> · {review.rating}/5
+                  <p className="muted">{review.review || "No review text."}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="empty-state">No reviews yet.</p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function ShopEditor({ shop, onSave, busy }) {
   return (
     <form
@@ -540,24 +575,46 @@ function VendorReturns({ onBalanceChanged }) {
 }
 
 export default function VendorPage({ page }) {
-  const shops = useResource("/vendor/shops"),
-    masters = useResource("/vendor/master-products"),
-    listings = useResource("/vendor/listings"),
-    purchases = useResource("/vendor/purchases"),
-    books = useResource(page === "payments" ? "/vendor/payments" : ""),
-    task = useTask();
-  const [shop, setShop] = useState({}),
-    [selected, setSelected] = useState(""),
-    [editing, setEditing] = useState(null),
-    [revision, setRevision] = useState(0);
+  const shops = useResource("/vendor/shops");
+  const masters = useResource("/vendor/master-products");
+  const [shop, setShop] = useState({});
+  const [selected, setSelected] = useState("");
+  const [shopFilter, setShopFilter] = useState("all");
+  const [editing, setEditing] = useState(null);
+  const [revision, setRevision] = useState(0);
+
+  const selectedShop =
+    shops.data?.find((entry) => String(entry.shop_id) === String(shopFilter)) ||
+    null;
+  const listings = useResource(
+    `/vendor/listings${shopFilter !== "all" ? `?shop_id=${shopFilter}` : ""}`,
+  );
+  const purchases = useResource(
+    `/vendor/purchases${shopFilter !== "all" ? `?shop_id=${shopFilter}` : ""}`,
+  );
+  const books = useResource(
+    page === "payments"
+      ? `/vendor/payments${shopFilter !== "all" ? `?shop_id=${shopFilter}` : ""}`
+      : "",
+  );
+  const reviews = useResource(
+    selectedShop ? `/vendor/shops/${selectedShop.shop_id}/reviews` : "",
+  );
+
   const product =
     masters.data?.find((p) => String(p.master_prod_id) === selected) ||
     masters.data?.[0];
   const activeShops =
     shops.data?.filter((s) => s.active_status === "active") || [];
+  const filteredListings = listings.data || [];
+  const filteredPurchases = purchases.data || [];
+
   async function write(path, method, body) {
     return task.run(() => api(path, { method, body: JSON.stringify(body) }));
   }
+
+  const task = useTask();
+
   return (
     <main className="content">
       <h1>
@@ -574,6 +631,22 @@ export default function VendorPage({ page }) {
         <Link to="/vendor/statistics">Income</Link>
         <Link to="/vendor/payments">Payments</Link>
       </nav>
+      <div className="panel">
+        <label>
+          Shop view
+          <select
+            value={shopFilter}
+            onChange={(event) => setShopFilter(event.target.value)}
+          >
+            <option value="all">All my shops</option>
+            {shops.data?.map((shopEntry) => (
+              <option key={shopEntry.shop_id} value={shopEntry.shop_id}>
+                {shopEntry.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <Feedback
         error={
           task.error ||
@@ -612,26 +685,51 @@ export default function VendorPage({ page }) {
               </article>
             ))}
           </section>
-          <ShopEditor
-            key={`${shop.shop_id || "new"}:${revision}`}
-            shop={shop}
-            busy={task.busy}
-            onSave={async (body) => {
-              if (
-                await write(
-                  shop.shop_id
-                    ? `/vendor/shops/${shop.shop_id}`
-                    : "/vendor/shops",
-                  shop.shop_id ? "PUT" : "POST",
-                  body,
-                )
-              ) {
-                shops.reload();
-                setShop({});
-                setRevision((n) => n + 1);
-              }
-            }}
-          />
+          <div>
+            <ShopEditor
+              key={`${shop.shop_id || "new"}:${revision}`}
+              shop={shop}
+              busy={task.busy}
+              onSave={async (body) => {
+                if (
+                  await write(
+                    shop.shop_id
+                      ? `/vendor/shops/${shop.shop_id}`
+                      : "/vendor/shops",
+                    shop.shop_id ? "PUT" : "POST",
+                    body,
+                  )
+                ) {
+                  shops.reload();
+                  setShop({});
+                  setRevision((n) => n + 1);
+                }
+              }}
+            />
+            {selectedShop && (
+              <section className="panel">
+                <h2>{selectedShop.name} reviews</h2>
+                {reviews.isLoading ? (
+                  <p role="status">Loading reviews…</p>
+                ) : (reviews.data?.length ?? 0) > 0 ? (
+                  <ul className="stack-list">
+                    {reviews.data.map((review) => (
+                      <li key={`${review.user_id}:${review.last_modified}`}>
+                        <strong>{review.name}</strong> · {review.rating}/5
+                        <p className="muted">
+                          {review.review || "No review text."}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="empty-state">
+                    No customer reviews yet for this shop.
+                  </p>
+                )}
+              </section>
+            )}
+          </div>
         </div>
       ) : (
         <>
@@ -714,21 +812,29 @@ export default function VendorPage({ page }) {
             {product && <MasterFacts product={product} />}
           </div>
           <h2>Your listings</h2>
-          {listings.data?.map((p) => (
-            <article className="collection-row" key={p.prod_id}>
-              <div>
-                <h3>{p.name}</h3>
-                <p>
-                  {p.shop_name} · {p.category_name} · Stock {p.in_stock} · $
-                  {p.unit_price} · {p.discontinued ? "Discontinued" : "Listed"}
-                </p>
-                <p>
-                  ID {p.prod_id} · Master {p.master_prod_id}
-                </p>
-              </div>
-              <button onClick={() => setEditing(p)}>Edit listing</button>
-            </article>
-          ))}
+          {filteredListings.length === 0 ? (
+            <p className="empty-state">
+              {shopFilter === "all"
+                ? "No listings yet for your shops."
+                : "No listings for the selected shop."}
+            </p>
+          ) : (
+            filteredListings.map((p) => (
+              <article className="collection-row" key={p.prod_id}>
+                <div>
+                  <h3>{p.name}</h3>
+                  <p>
+                    {p.shop_name} · {p.category_name} · Stock {p.in_stock} · ${p.unit_price} · {p.discontinued ? "Discontinued" : "Listed"}
+                  </p>
+                  <p>
+                    ID {p.prod_id} · Master {p.master_prod_id}
+                  </p>
+                </div>
+                <button onClick={() => setEditing(p)}>Edit listing</button>
+                <VendorProductReviews productId={p.prod_id} />
+              </article>
+            ))
+          )}
           {editing && (
             <ListingEditor
               key={editing.prod_id}
@@ -749,35 +855,42 @@ export default function VendorPage({ page }) {
             />
           )}
           <h2>Wholesale purchase history</h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID / date</th>
-                  <th>Shop / product</th>
-                  <th>Quantity</th>
-                  <th>Unit cost</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {purchases.data?.map((p) => (
-                  <tr key={p.purchase_id}>
-                    <td>
-                      {p.purchase_id} /{" "}
-                      {new Date(p.purchased_at).toLocaleString()}
-                    </td>
-                    <td>
-                      {p.shop_name} / {p.name}
-                    </td>
-                    <td>{p.quantity}</td>
-                    <td>{p.wholesale_unit_price}</td>
-                    <td>{p.total}</td>
+          {filteredPurchases.length === 0 ? (
+            <p className="empty-state">
+              {shopFilter === "all"
+                ? "No purchases recorded yet."
+                : "No purchases recorded for the selected shop."}
+            </p>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID / date</th>
+                    <th>Shop / product</th>
+                    <th>Quantity</th>
+                    <th>Unit cost</th>
+                    <th>Total</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredPurchases.map((p) => (
+                    <tr key={p.purchase_id}>
+                      <td>
+                        {p.purchase_id} / {new Date(p.purchased_at).toLocaleString()}
+                      </td>
+                      <td>
+                        {p.shop_name} / {p.name}
+                      </td>
+                      <td>{p.quantity}</td>
+                      <td>{p.wholesale_unit_price}</td>
+                      <td>{p.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
     </main>

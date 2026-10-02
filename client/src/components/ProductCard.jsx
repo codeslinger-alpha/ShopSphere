@@ -12,6 +12,7 @@ export default function ProductCard({
   wishlistLabel = "Wishlist",
 }) {
   const outOfStock = product.in_stock < 1;
+    const reviewCount = Number(product.review_count ?? 0);
 
   return (
     <article className="product-card">
@@ -48,6 +49,11 @@ export default function ProductCard({
         <p className="product-price">${product.unit_price}</p>
         <p className={outOfStock ? "product-stock out" : "product-stock"}>
           {outOfStock ? "Currently unavailable" : `${product.in_stock} in stock`}
+        </p>
+        <p className="product-meta">
+          {reviewCount > 0
+            ? `${Number(product.average_rating).toFixed(1)}/5 · ${reviewCount} review${reviewCount === 1 ? "" : "s"}`
+            : "No reviews yet"}
         </p>
         <Link className="link-button" to={`/products/${product.prod_id}`}>
           Details and reviews

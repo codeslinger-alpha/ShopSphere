@@ -34,7 +34,14 @@ const facets = [
 ];
 
 // Records every /api/products query string so a test can assert on it.
-async function mockApi(page, { items = 5, limit = 24 } = {}) {
+async function mockApi(
+    page,
+    {
+        items = 5,
+        limit = 24,
+        reviewSummary = { review_count: 0, average_rating: null },
+    } = {},
+) {
     const queries = [];
     await page.route((url) => url.pathname.startsWith("/api/"), async (route) => {
         const url = new URL(route.request().url());
@@ -48,7 +55,7 @@ async function mockApi(page, { items = 5, limit = 24 } = {}) {
             return route.fulfill({
                 json: {
                     items: Array.from({ length: Math.min(size, Math.max(items - (page_ - 1) * size, 0)) }, (_, index) =>
-                        listing({ prod_id: (page_ - 1) * size + index + 1, name: `Keyboard ${(page_ - 1) * size + index + 1}` }),
+                        listing({ ...reviewSummary, prod_id: (page_ - 1) * size + index + 1, name: `Keyboard ${(page_ - 1) * size + index + 1}` }),
                     ),
                     total: items,
                     page: page_,
@@ -123,6 +130,16 @@ test("the toolbar range follows the page size actually requested", async ({ page
     await page.getByRole("button", { name: "4", exact: true }).click();
     await expect(page.locator(".results-summary")).toHaveText("Showing 10–11 of 11 products");
     await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();
+});
+
+test("product cards show the average and count of previous reviews", async ({ page }) => {
+    await mockApi(page, {
+        items: 1,
+        reviewSummary: { review_count: 3, average_rating: "4.7" },
+    });
+    await page.goto("/products");
+
+    await expect(page.locator(".product-card")).toContainText("4.7/5 · 3 reviews");
 });
 
 test("attribute checkboxes OR within an attribute and AND across attributes", async ({ page }) => {

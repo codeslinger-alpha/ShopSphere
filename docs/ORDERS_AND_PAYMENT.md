@@ -197,7 +197,7 @@ customer's money had not moved and nothing had been withheld from it.
 | `GET` | `/api/delivery/deliveries` | delivery | The courier's assigned `pending` and `shipped` orders, with their items and the customer's contact details. |
 | `PUT` | `/api/delivery/orders/:orderId/status` | delivery | `{"order_status":"shipped"\|"delivered"}`. `404` not assigned to this courier, `409` wrong current status. Delivering also completes the payment and credits the courier. |
 | `GET` | `/api/account/payments` | customer | The caller's own payment history: goods and delivery charge as separate columns, and their sum as what was paid. |
-| `GET` | `/api/vendor/payments` | vendor | The caller's books across owned shops: sales (no buyer identity), purchases, refunds received and the shop balance. No shop ID is accepted. |
+| `GET` | `/api/vendor/payments` | vendor | The caller's books across owned shops: sales (no buyer identity), purchases, refunds received and the shop balance. Optional `shop_id` filters to one shop after the server verifies ownership. |
 | `GET` | `/api/vendor/balance`; `POST /api/vendor/topups` | vendor | One shop's balance and the movements behind it; and a recharge that credits it. A recharge records the money and says plainly that no card was charged. |
 | `POST` | `/api/returns`; `GET /api/returns` | customer | Ask to return a line of a delivered order; and the caller's own returns. The refund amount is computed from the order line, never supplied. |
 | `GET` | `/api/vendor/returns`; `PUT /api/vendor/returns/:returnId/{approve,reject,restock}` | vendor | The returns to decide on, and the three transitions. `approve` debits the shop and records the refund; `restock` returns the goods to stock. |

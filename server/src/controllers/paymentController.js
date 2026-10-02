@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const v = require("../utils/input");
 const { paginated, parseListQuery } = require("../utils/listQuery");
 const q = require("../db/queries/paymentQueries");
 // The vendor's wholesale purchases already have a query and a screen. This page
@@ -39,6 +40,18 @@ async function listRefunds(req, res) {
 // there is no second figure to derive.
 async function vendorPayments(req, res) {
   const owner = req.user.user_id;
+  const shopId = req.query.shop_id ? v.id(req.query.shop_id, "Shop") : null;
+
+  if (shopId) {
+    if (!(await pool.query(vendor.OWNED_SHOP, [shopId, owner])).rowCount)
+      v.fail(404, "Your shop was not found.");
+    const sales = (await pool.query(q.LIST_OWNED_SALES_FOR_SHOP, [owner, shopId])).rows;
+    const purchases = (await pool.query(vendor.LIST_OWNED_PURCHASES_FOR_SHOP, [owner, shopId])).rows;
+    const refunds = (await pool.query(q.LIST_OWNED_REFUNDS_FOR_SHOP, [owner, shopId])).rows;
+    const shops = (await pool.query(q.LIST_OWNED_BALANCES_FOR_SHOP, [owner, shopId])).rows;
+    const totals = (await pool.query(q.OWNED_TOTALS_FOR_SHOP, [owner, shopId])).rows[0];
+    return res.json({ sales, purchases, refunds, shops, totals });
+  }
 
   const sales = (await pool.query(q.LIST_OWNED_SALES, [owner])).rows;
   const purchases = (await pool.query(vendor.LIST_OWNED_PURCHASES, [owner])).rows;

@@ -52,12 +52,12 @@ in `src/db/queries/`. This accounts for every controller and query module.
 | Controller / query file | What it does and database tables used |
 | --- | --- |
 | `authController.js` / `authQueries.js` | Registration, login, logout and current user. Reads `roles`, `countries`, `users`; writes `locations`, `users`, `delivery_personnel`. Also supplies the authentication middleware's user lookup and shared location insert. |
-| `catalogController.js` / `catalogQueries.js` | Public product search/details/facets, categories, shops, roles and database health. Joins `products`, `shops`, `master_products`, `categories`, `attributes`, `category_attributes`, `attribute_values`; health uses `SELECT 1`. |
+| `catalogController.js` / `catalogQueries.js` | Public product search/details/facets, categories, shops, roles and database health. Product-list results include each listing's review count and average rating, aggregated from `product_reviews`. Joins `products`, `shops`, `master_products`, `categories`, `attributes`, `category_attributes`, `attribute_values`; health uses `SELECT 1`. |
 | `cartController.js` / `cartQueries.js` | Customer cart reads and guarded quantity changes. Writes `cart_items`; joins listing/master/shop availability. Also uses `wishlistQueries.PRODUCT_EXISTS`. |
 | `wishlistController.js` / `wishlistQueries.js` | Idempotent saves and owned deletions in `wish_list_items`; joins catalog tables for display/availability. |
 | `orderController.js` / `orderQueries.js` | Checkout, history, cancellation and courier delivery. Reads/writes `cart_items`, `products`, `orders`, `order_items`, `payments`, `delivery_personnel`; reads `users`, `shops`, `master_products`, `locations`. Uses the shared location insert for a new shipping address. The courier's pay constants live in this query module and are written onto each order at placement. |
 | `profileController.js` / `profileQueries.js` | Country list and current user's profile. Joins `users`, `roles`, `locations`, `countries`, `delivery_personnel`; creates a fresh location when updating an address. |
-| `vendorController.js` / `vendorQueries.js` | Owned shops, wholesale purchases, retail listings, the shop balance and recharge, and the income statistics. Writes `shops`, `locations`, `shop_purchases`, `products`, `shop_topups`; debits and credits `shops.balance`; reads available `master_products` and category metadata. |
+| `vendorController.js` / `vendorQueries.js` | Owned shops, shop reviews, wholesale purchases, retail listings and their product reviews, the shop balance and recharge, and income statistics. Shop-specific reads validate ownership. Writes `shops`, `locations`, `shop_purchases`, `products`, `shop_topups`; debits and credits `shops.balance`; reads available `master_products`, category metadata, `shop_reviews` and `product_reviews`. |
 | `returnController.js` / `returnQueries.js` | Customer returns end to end: the request, the vendor's accept/reject, the courier's collection and the restock. Writes `product_returns`, `customer_refunds` and `products.in_stock`; debits `shops.balance` on approval. |
 | `adminController.js` / `adminQueries.js` | Paged user/shop moderation; reads `users`, `roles`, `shops`, `locations`, `products`; changes user/shop status and invalidates user sessions. |
 | `adminCatalogController.js` / `adminCatalogQueries.js` | Categories, attributes, master products and listing removal. Writes `categories`, `attributes`, `category_attributes`, `master_products`, `attribute_values`, `products`; attributes remaining stock to `shop_purchases`, writes `vendor_refunds` and credits `shops.balance`. |
@@ -82,11 +82,12 @@ queries prevent access to another customer's or vendor's records.
 | `orderRoutes.js` | `GET/POST /orders`; `GET /orders/:id`; `PUT /orders/:id/cancel` | Customer → order |
 | `roleRoutes.js` | `GET /countries`; `GET/PUT /profile` | Countries public, profile signed in → profile |
 | `roleRoutes.js` | `GET /products/:id/reviews`, `/shops/:id/reviews` | Public → review / shopReview |
+| `roleRoutes.js` | `GET /vendor/shops/:id/reviews` | Vendor; verifies the shop belongs to the session → vendor |
 | `roleRoutes.js` | `GET /products/:id/review-eligibility`, `/shops/:id/review-eligibility`; `PUT/DELETE /products/:id/review`, `/shops/:id/review` | Customer → review / shopReview |
 | `roleRoutes.js` | `GET /account/payments` | Customer → payment |
 | `roleRoutes.js` | `GET/POST /returns` | Customer → return |
-| `roleRoutes.js` | `GET/POST /vendor/shops`; `PUT /vendor/shops/:id`; `GET/POST /vendor/listings`; `PUT /vendor/listings/:id`; `GET /vendor/purchases` | Vendor → vendor |
-| `roleRoutes.js` | `GET /vendor/master-products`; `GET /vendor/payments` | Vendor → adminCatalog / payment |
+| `roleRoutes.js` | `GET/POST /vendor/shops`; `PUT /vendor/shops/:id`; `GET/POST /vendor/listings`; `PUT /vendor/listings/:id`; `GET /vendor/purchases` | Vendor → vendor; `shop_id` optionally filters listing and purchase reads, with ownership checked |
+| `roleRoutes.js` | `GET /vendor/master-products`; `GET /vendor/payments` | Vendor → adminCatalog / payment; `shop_id` optionally filters payment books after an ownership check |
 | `roleRoutes.js` | `GET /vendor/balance`; `POST /vendor/topups` | Vendor → vendor |
 | `roleRoutes.js` | `GET /vendor/statistics` | Vendor → vendor |
 | `roleRoutes.js` | `GET /vendor/returns`; `PUT /vendor/returns/:id/approve`, `/reject`, `/restock` | Vendor → return |
@@ -101,6 +102,8 @@ queries prevent access to another customer's or vendor's records.
 
 List filters use `q`, `page`, `limit` and feature-specific choices. Products also
 accept category, price range, sort and repeated `attribute=id:value` filters.
+`GET /products` includes `review_count` and `average_rating` for each listing;
+the count is zero and average is `null` when no reviews exist.
 Paged responses are `{ items, total, page, limit, total_pages }`; other list routes
 may return arrays. Current window-count pagination returns total zero for an
 out-of-range empty page. Common errors: 400 invalid input, 401 missing/stale login,
@@ -146,14 +149,14 @@ never merely a filter applied to the result.
 | `LIST_OWNED_SHOPS`, `OWNED_SHOP`, `ACTIVE_OWNED_SHOP` | A vendor's shops; one shop by ownership; one shop that is additionally `active`. The three exist because different operations need different proof. |
 | `CREATE_SHOP` | A new shop is inserted with `active_status = 'pending'`. Every catalog query requires `'active'`, so a pending shop is invisible to the storefront until an administrator approves it. |
 | `UPDATE_SHOP` | Edits the shop's own fields. `active_status` is not in the `SET` list — shop status is administrator-only, so a vendor can neither approve their own shop nor undo a ban. |
-| `LIST_OWNED_LISTINGS`, `UPDATE_OWNED_LISTING`, `CREATE_LISTING`, `RESTOCK_LISTING`, `LISTING_FOR_MASTER` | The vendor's retail listings, joined to master and category. `LISTING_FOR_MASTER` picks the vendor's existing listing of a master, because a purchase restocks that listing rather than creating a second one. |
+| `LIST_OWNED_LISTINGS`, `LIST_OWNED_LISTINGS_FOR_SHOP`, `UPDATE_OWNED_LISTING`, `CREATE_LISTING`, `RESTOCK_LISTING`, `LISTING_FOR_MASTER` | The vendor's retail listings, joined to master and category. The shop variant scopes by both owner and shop. `LISTING_FOR_MASTER` picks the vendor's existing listing of a master, because a purchase restocks that listing rather than creating a second one. |
 | `AVAILABLE_MASTER` | The master being bought, only if its `active_status = 'available'`. |
 | `CREATE_PURCHASE` | Records the wholesale acquisition with `quantity × wholesale_unit_price`. A ledger row, not an order. |
 | `DEBIT_SHOP_BALANCE` | `SET balance = balance - $2 WHERE shop_id = $1 AND owner = $3 AND balance >= $2`. The funds test is **part of the predicate**, not a read followed by a check: two purchases racing cannot both pass and overdraw the shop, because the second waits on the row lock and then re-tests the committed balance. `rowCount = 0` becomes a 409. |
 | `CREDIT_SHOP_BALANCE`, `CREATE_TOPUP` | A recharge, in two statements in one transaction: the balance moves and the ledger row that explains it is written. No gateway is involved, so these two are the whole of it. |
 | `SHOP_BALANCE` | One shop's balance for the recharge page, cast to `numeric(12,2)` so the driver's string comes back at two decimals. |
 | `LIST_SHOP_MOVEMENTS` | The statement of movements: a `UNION ALL` over five sources — `sale` (+), `purchase` (−), `topup` (+), `admin_refund` (+) and `customer_return` (−) — told apart by `kind` so one list can be rendered rather than two interleaved by hand. Sales are read from `order_items` grouped by delivered order, which is exactly when `settle_delivery` credits the balance. |
-| `LIST_OWNED_PURCHASES`, `LIST_OWNED_LISTINGS` | Supporting reads for the vendor workspace. |
+| `LIST_OWNED_PURCHASES`, `LIST_OWNED_PURCHASES_FOR_SHOP`, `LIST_OWNED_LISTINGS` | Supporting reads for the vendor workspace; shop-specific reads retain the owner predicate as well as the requested shop ID. |
 
 ### `returnQueries.js` — customer returns
 
@@ -299,9 +302,8 @@ return is not in the state the caller assumed.
 ### `paymentController.js`
 
 `accountPayments` (a customer's own), `vendorPayments` (sales, purchases, refunds
-and balances in one response — four round trips to build one page is three more
-than it needs), and the admin `listPayments` / `listRefunds`. All four read; none
-writes.
+and balances in one response — optionally filtered to one owned shop by `shop_id`),
+and the admin `listPayments` / `listRefunds`. All four read; none writes.
 
 ### `adminController.js` and `adminCatalogController.js`
 

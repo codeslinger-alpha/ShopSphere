@@ -99,12 +99,21 @@ function buildProductListQuery(filters) {
   });
 
   values.push(filters.limit, (filters.page - 1) * filters.limit);
-  const text = `${cte}
-    SELECT ${PRODUCT_COLUMNS}, COUNT(*) OVER() AS total_count
+    const text = `${cte}
+      SELECT ${PRODUCT_COLUMNS},
+             COALESCE(review_summary.review_count, 0)::int AS review_count,
+             review_summary.average_rating,
+             COUNT(*) OVER() AS total_count
     FROM products p
     JOIN shops s ON s.shop_id = p.shop_id
     JOIN master_products mp ON mp.master_prod_id = p.master_prod_id
     JOIN categories c ON c.category_id = mp.category_id
+      LEFT JOIN (
+        SELECT prod_id, COUNT(*)::int AS review_count,
+               ROUND(AVG(rating)::numeric, 1) AS average_rating
+        FROM product_reviews
+        GROUP BY prod_id
+      ) review_summary ON review_summary.prod_id = p.prod_id
     WHERE ${conditions.join("\n      AND ")}
     ORDER BY ${SORT_CLAUSES[filters.sort]}
     LIMIT $${values.length - 1} OFFSET $${values.length}`;

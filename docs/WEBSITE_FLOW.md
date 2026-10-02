@@ -107,6 +107,15 @@ location and switches the user's reference, preserving historical order addresse
 Role, ID, points, status and creation time are visible but not self-editable.
 Password hashes/token versions are never exposed. There is no password reset flow.
 
+## Storefront catalog and product reviews
+
+The public catalog (`/products`) shows each listing's average product rating and
+review count on its product card. **Details and reviews** opens the product page,
+which shows the full review list. A customer can write or update a product review
+only after an order containing that listing is delivered; the database trigger
+enforces this even if a request bypasses the page. The seeded demo customer has a
+delivered order and a sample review for demonstrating the display.
+
 ## Admin catalog flow
 
 Open **Dashboard → Manage catalog** (`/admin/catalog`, `AdminCatalogPage.jsx`).
@@ -239,10 +248,18 @@ listings are preserved, not destructively merged. Listing edits allow retail pri
 seller description and discontinued status. Stock increases require a purchase.
 Purchase history displays ID, date, shop, master, quantity, unit cost and total.
 
+The **Shop view** selector filters listings and purchase history to one owned shop
+or shows all owned shops. On **My shops**, selecting a shop shows its shop reviews;
+on **Inventory and purchases**, each listing has a **View reviews** control for
+that product's customer reviews. These reads are limited to the vendor's own shops
+and listings. The Payments page uses the same selector to scope books to one owned
+shop; choosing **All my shops** shows the vendor-wide books.
+
 **Payments** (`/vendor/payments`) is the vendor's books: sales of their own listings,
 their wholesale purchases, refunds they have received, their shops' balances, and
-totals. It is scoped to owned shops from the session and accepts no shop ID, so there
-is no id to forge. The sales rows deliberately carry `order_id` and **not** the
+totals. It is scoped to owned shops from the session and may optionally filter by
+`shop_id`; the server verifies that the requested shop belongs to that vendor. The
+sales rows deliberately carry `order_id` and **not** the
 buyer's name or email: the courier delivering the parcel already has it, and the vendor
 is fulfilling against an order number rather than a person. A sale is worth its line
 subtotal in full — there is no commission in between the customer's payment and the

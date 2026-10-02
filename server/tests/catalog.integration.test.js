@@ -115,6 +115,9 @@ test("catalog search, filtering and facets against PostgreSQL", async (t) => {
       // The window count is transport, not a product field.
       assert.equal("total_count" in result.data.items[0], false);
       assert.equal(result.data.items[0].shop_name.length > 0, true);
+      const reviewed = result.data.items.find((item) => item.review_count > 0);
+      assert.ok(reviewed, "the seeded product review appears in catalog summaries");
+      assert.equal(Number(reviewed.average_rating), 5);
     });
 
     await check("search spans the listing, master and category names", async () => {

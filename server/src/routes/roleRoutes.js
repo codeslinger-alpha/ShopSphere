@@ -69,6 +69,7 @@ router.get("/returns", requireAuth, requireRole("customer"), returns.mine);
 router.post("/returns", requireAuth, requireRole("customer"), returns.request);
 router.use("/vendor", requireAuth, requireRole("vendor"));
 router.get("/vendor/shops", vendor.shops);
+router.get("/vendor/shops/:shopId/reviews", vendor.shopReviewsList);
 router.post("/vendor/shops", vendor.saveShop);
 router.put("/vendor/shops/:shopId", vendor.saveShop);
 router.get("/vendor/master-products", catalog.availableMasters);

@@ -52,6 +52,15 @@ const LIST_OWNED_LISTINGS = `
   WHERE s.owner = $1
   ORDER BY p.prod_id
 `;
+const LIST_OWNED_LISTINGS_FOR_SHOP = `
+  SELECT p.*, s.name AS shop_name, mp.manufacturer, c.name AS category_name
+  FROM products p
+  JOIN shops s USING (shop_id)
+  JOIN master_products mp USING (master_prod_id)
+  JOIN categories c ON c.category_id = mp.category_id
+  WHERE s.owner = $1 AND p.shop_id = $2
+  ORDER BY p.prod_id
+`;
 const LIST_OWNED_PURCHASES = `
   SELECT
     sp.*,
@@ -62,6 +71,18 @@ const LIST_OWNED_PURCHASES = `
   JOIN shops s USING (shop_id)
   JOIN master_products mp USING (master_prod_id)
   WHERE s.owner = $1
+  ORDER BY sp.purchase_id DESC
+`;
+const LIST_OWNED_PURCHASES_FOR_SHOP = `
+  SELECT
+    sp.*,
+    mp.name,
+    s.name AS shop_name,
+    sp.quantity * sp.wholesale_unit_price AS total
+  FROM shop_purchases sp
+  JOIN shops s USING (shop_id)
+  JOIN master_products mp USING (master_prod_id)
+  WHERE s.owner = $1 AND sp.shop_id = $2
   ORDER BY sp.purchase_id DESC
 `;
 
@@ -183,7 +204,9 @@ module.exports = {
   CREDIT_SHOP_BALANCE,
   DEBIT_SHOP_BALANCE,
   LIST_OWNED_LISTINGS,
+  LIST_OWNED_LISTINGS_FOR_SHOP,
   LIST_OWNED_PURCHASES,
+  LIST_OWNED_PURCHASES_FOR_SHOP,
   LIST_OWNED_SHOPS,
   LIST_SHOP_MOVEMENTS,
   LISTING_FOR_MASTER,

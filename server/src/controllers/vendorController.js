@@ -4,8 +4,15 @@ const v = require("../utils/input");
 const { CREATE_LOCATION } = require("../db/queries/authQueries");
 const q = require("../db/queries/vendorQueries");
 const sq = require("../db/queries/statisticsQueries");
+const shopReviews = require("../db/queries/shopReviewQueries");
 async function shops(req, res) {
   res.json((await pool.query(q.LIST_OWNED_SHOPS, [req.user.user_id])).rows);
+}
+async function shopReviewsList(req, res) {
+  const shopId = v.id(req.params.shopId, "Shop");
+  if (!(await pool.query(q.OWNED_SHOP, [shopId, req.user.user_id])).rowCount)
+    v.fail(404, "Your shop was not found.");
+  res.json((await pool.query(shopReviews.LIST_SHOP_REVIEWS, [shopId])).rows);
 }
 async function saveShop(req, res) {
   const b = req.body || {},
@@ -41,9 +48,37 @@ async function saveShop(req, res) {
   res.status(id ? 200 : 201).json({ message, shop });
 }
 async function listings(req, res) {
+  const shopId = req.query.shop_id ? v.id(req.query.shop_id, "Shop") : null;
+  if (shopId) {
+    if (!(await pool.query(q.OWNED_SHOP, [shopId, req.user.user_id])).rowCount)
+      v.fail(404, "Your shop was not found.");
+    res.json(
+      (
+        await pool.query(q.LIST_OWNED_LISTINGS_FOR_SHOP, [
+          req.user.user_id,
+          shopId,
+        ])
+      ).rows,
+    );
+    return;
+  }
   res.json((await pool.query(q.LIST_OWNED_LISTINGS, [req.user.user_id])).rows);
 }
 async function purchases(req, res) {
+  const shopId = req.query.shop_id ? v.id(req.query.shop_id, "Shop") : null;
+  if (shopId) {
+    if (!(await pool.query(q.OWNED_SHOP, [shopId, req.user.user_id])).rowCount)
+      v.fail(404, "Your shop was not found.");
+    res.json(
+      (
+        await pool.query(q.LIST_OWNED_PURCHASES_FOR_SHOP, [
+          req.user.user_id,
+          shopId,
+        ])
+      ).rows,
+    );
+    return;
+  }
   res.json((await pool.query(q.LIST_OWNED_PURCHASES, [req.user.user_id])).rows);
 }
 async function buy(req, res) {
@@ -243,6 +278,7 @@ module.exports = {
   listings,
   purchases,
   saveShop,
+  shopReviewsList,
   shops,
   statistics,
   topUp,
