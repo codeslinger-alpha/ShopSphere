@@ -115,8 +115,12 @@ database — check `DB_HOST`, `DB_USER` and `DB_PASSWORD` in the Render dashboar
 ## Step 4 — Vercel (the website)
 
 1. Vercel dashboard → **Add New** → **Project** → import the same repository.
-2. Leave **Root Directory** as the repository root; `vercel.json` already points
-   the build at the client workspace and the output at `client/dist`.
+2. Leave **Root Directory** as the repository root. This is not cosmetic. Vercel
+   only reads `vercel.json` from the Root Directory, so pointing it at `client`
+   silently discards the entire file — the build command, the output path, and
+   the `/api/*` proxy to Render. The Output Directory is resolved relative to the
+   Root Directory too, so `client/dist` set while the root is `client` would mean
+   `client/client/dist`.
 3. Under **Environment Variables**, add:
 
    | Name | Value |
@@ -236,4 +240,5 @@ live database.
 | Logged in, then every request 401s | the cookie is not being sent; the proxy rewrite is missing or ordered after the catch-all |
 | `503` from `/api/health` | the API is up but the database is unreachable — Render's env vars |
 | Build fails on `npm ci` | `package-lock.json` is out of step with a `package.json`; run `npm install` locally and commit the lockfile |
+| `No Output Directory named "dist" found` | Vercel's **Root Directory** is not the repository root. `vercel.json` is read only from the Root Directory, so the moment it points at `client` the output path is discarded and the Vite preset's own default (`dist`) takes over. Set Root Directory back to the repository root and leave Output Directory empty |
 | First visit after a while takes a minute | the free instance was asleep; expected, see above |
