@@ -1,0 +1,54 @@
+# A Render Blueprint. Creating a Blueprint from the repository reads this file
+# and provisions the API from it, so the service settings live in version control
+# instead of in a form nobody can review or reproduce.
+#
+# Secrets are not here. `sync: false` makes Render prompt for a value at creation
+# time and keep it out of the repository — which is the point, since DB_PASSWORD
+# and JWT_SECRET must never be committed.
+services:
+  - type: web
+    name: shopsphere-api
+    runtime: node
+    plan: free
+    # The closest free region to the Supabase pooler, which is in ap-south-1
+    # (Mumbai). Every query crosses this link.
+    region: singapore
+    branch: main
+    # The repository is one npm workspace with a single root lockfile, so both
+    # install and start run from the root. `npm start` is the root script that
+    # delegates to the server workspace.
+    buildCommand: npm ci
+    startCommand: npm start
+    # Render polls this to decide whether a deploy succeeded. It is also what the
+    # keep-alive ping calls, which is why it touches the database rather than
+    # only answering.
+    healthCheckPath: /api/health
+    envVars:
+      # Sets the auth cookie's `secure` flag and quiets the per-request and
+      # per-statement loggers, both of which are what production wants.
+      - key: NODE_ENV
+        value: production
+      # The Supabase session pooler. Session mode (5432) rather than transaction
+      # mode (6543): the application runs explicit transactions, and session mode
+      # is what guarantees the whole transaction stays on one connection.
+      - key: DB_HOST
+        value: aws-0-ap-south-1.pooler.supabase.com
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        value: postgres
+      # Contains the Supabase project reference, so it is prompted for rather
+      # than written down here.
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      # The browser only ever talks to the Vercel domain, which proxies /api to
+      # this service, so no cross-origin request reaches here and this list is
+      # not consulted. It is set anyway so the API is correct on its own terms,
+      # and so a direct call to the Render URL is refused rather than silently
+      # allowed. Replace with the real Vercel URL after the first deploy.
+      - key: CLIENT_ORIGIN
+        value: https://REPLACE-WITH-YOUR-VERCEL-URL.vercel.app

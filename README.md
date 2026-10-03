@@ -6,7 +6,7 @@ Read the [backend guide](docs/BACKEND.md) for the file map, API routes, SQL,
 transactions, stored routines and database rules.
 The broader [website/API guide](docs/WEBSITE_FLOW.md) covers role workflows and
 field ownership.
-See the [current checklist review](docs/CHECKLIST.md), [demo dataset](docs/DEMO_DATA.md), and the
+See the [demo dataset](docs/DEMO_DATA.md) and the
 [schema reference and ERD](docs/SCHEMA.md).
 
 From this directory, install dependencies once with `npm install`.
@@ -28,3 +28,6 @@ reference goes stale silently.
 This is one npm workspace with a root lockfile and dependency installation.
 The root, client and server `package.json` files have distinct purposes and are
 required. Run installation and project commands from the root.
+
+To publish it, see the [deployment guide](docs/DEPLOYMENT.md) — Vercel for the
+website, Render for the API, and Supabase for the database, all on free plans.

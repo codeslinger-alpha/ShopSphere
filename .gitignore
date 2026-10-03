@@ -10,3 +10,13 @@ client/playwright-report/
 test-results/
 playwright-report/
 *.log
+
+# Tooling that belongs to whoever is working on this checkout rather than to the
+# application: agent configuration, editor settings, and the delivery checklist.
+# None of it is needed to install, build or run ShopSphere, so a clone should not
+# inherit one person's setup.
+.agents/
+.claude/
+.codex/
+.vscode/
+docs/CHECKLIST.md
