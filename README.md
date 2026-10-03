@@ -35,11 +35,17 @@ required. Run installation and project commands from the root.
 - **API** — <https://shopsphere-api-t8gf.onrender.com> (Render)
 - **Database** — Supabase PostgreSQL
 
-`GET /api/health` answers `{"success":true,"database":true}` when the API is up
-and connected, and `503` when it cannot reach PostgreSQL.
-
 Both hosts redeploy on every push to `main`. The website proxies `/api/*` to the
 API so the session cookie stays first-party.
+
+`GET /api/health` reports whether the API is up and connected to the database:
+`{"success":true,"database":true}`, or `503` when the API is running but
+PostgreSQL is unreachable. Calling it through the website checks the whole chain
+— build, proxy, API and database — in one request.
+
+Log in with the seeded demo accounts in the
+[website and API guide](docs/WEBSITE_FLOW.md); they are fictional and meant to be
+public.
 
 The API runs on Render's free plan: it sleeps after 15 minutes without traffic and
 takes about a minute to wake, so the first request after a quiet spell is slow.
