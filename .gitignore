@@ -3,6 +3,10 @@ node_modules/
 .env.*
 !.env.example
 client/dist/
+# The same output at the repository root, which is where an alternative Vite
+# `outDir` puts it. Ignored so a build artifact cannot be committed by a
+# `git add -A` whichever path the build is configured to use.
+/dist/
 client/test-results/
 client/playwright-report/
 # Playwright resolves its output directory against the working directory, so a

@@ -8,9 +8,10 @@ Three hosts, all on free plans, all deploying from the same GitHub repository:
 | API | **Render** | the Express server |
 | Database | **Supabase** | PostgreSQL (already set up) |
 
-The repository already carries the two files that configure this: `vercel.json`
-and `render.yaml`. No application code changed — not in `server/src` and not in
-`client/src`. The API already served a health route that checks the database
+The repository already carries the two files that configure this:
+`client/vercel.json` and `render.yaml`. No application code changed — not in
+`server/src` and not in `client/src`. The API already served a health route that
+checks the database
 (`GET /api/health` → `catalogController.healthCheck`), which is exactly what the
 keep-alive ping below needs.
 
@@ -24,7 +25,7 @@ would arrive unauthenticated. The usual fix is `sameSite: "none"`, which makes t
 cookie third-party; Safari blocks those outright and Chrome is phasing them out.
 
 So the browser never talks to Render. It calls `/api/...` on its own Vercel
-domain, and `vercel.json` proxies that to Render:
+domain, and `client/vercel.json` proxies that to Render:
 
 ```
 browser ──https──▶ shopsphere.vercel.app
@@ -100,7 +101,7 @@ a transaction stays on a single connection.
 4. **Apply**. The first build takes a few minutes.
 5. When it goes live, note the URL — `https://shopsphere-api.onrender.com` unless
    the name was taken. **If it differs, update the `destination` in
-   `vercel.json` to match.**
+   `client/vercel.json` to match.**
 
 Confirm it is up:
 
@@ -115,12 +116,14 @@ database — check `DB_HOST`, `DB_USER` and `DB_PASSWORD` in the Render dashboar
 ## Step 4 — Vercel (the website)
 
 1. Vercel dashboard → **Add New** → **Project** → import the same repository.
-2. Leave **Root Directory** as the repository root. This is not cosmetic. Vercel
-   only reads `vercel.json` from the Root Directory, so pointing it at `client`
-   silently discards the entire file — the build command, the output path, and
-   the `/api/*` proxy to Render. The Output Directory is resolved relative to the
-   Root Directory too, so `client/dist` set while the root is `client` would mean
-   `client/client/dist`.
+2. Set **Root Directory** to `client` and leave **Output Directory** empty. Both
+   are resolved relative to the Root Directory, and this is also why the rewrite
+   rules live at `client/vercel.json` instead of at the repository root: Vercel
+   reads that file only from the Root Directory, so a copy at the repository root
+   is not read at all — the `/api/*` proxy is never registered and the build ends
+   in `No Output Directory named "dist"`, hunting for output the framework preset
+   guessed at. `dist` is where Vite writes; `client/dist` typed in that field
+   would mean `client/client/dist`.
 3. Under **Environment Variables**, add:
 
    | Name | Value |
@@ -236,9 +239,9 @@ live database.
 
 | Symptom | Where to look |
 | --- | --- |
-| "Could not connect to the server." | `VITE_API_URL` missing in Vercel, or the `destination` in `vercel.json` does not match the Render URL |
+| "Could not connect to the server." | `VITE_API_URL` missing in Vercel, or the `destination` in `client/vercel.json` does not match the Render URL |
 | Logged in, then every request 401s | the cookie is not being sent; the proxy rewrite is missing or ordered after the catch-all |
 | `503` from `/api/health` | the API is up but the database is unreachable — Render's env vars |
 | Build fails on `npm ci` | `package-lock.json` is out of step with a `package.json`; run `npm install` locally and commit the lockfile |
-| `No Output Directory named "dist" found` | Vercel's **Root Directory** is not the repository root. `vercel.json` is read only from the Root Directory, so the moment it points at `client` the output path is discarded and the Vite preset's own default (`dist`) takes over. Set Root Directory back to the repository root and leave Output Directory empty |
+| `No Output Directory named "dist" found` | **Root Directory** in Vercel is not set to `client`. Vercel reads `vercel.json` only from the Root Directory, so with it set anywhere else `client/vercel.json` is ignored, the output path it declares is discarded, and the build is judged against a path nothing wrote to. Set Root Directory to `client` and clear Output Directory |
 | First visit after a while takes a minute | the free instance was asleep; expected, see above |
