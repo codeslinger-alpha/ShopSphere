@@ -29,5 +29,20 @@ This is one npm workspace with a root lockfile and dependency installation.
 The root, client and server `package.json` files have distinct purposes and are
 required. Run installation and project commands from the root.
 
-To publish it, see the [deployment guide](docs/DEPLOYMENT.md) — Vercel for the
-website, Render for the API, and Supabase for the database, all on free plans.
+## Live deployment
+
+- **Website** — <https://shop-sphere-shop-sphere3.vercel.app> (Vercel)
+- **API** — <https://shopsphere-api-t8gf.onrender.com> (Render)
+- **Database** — Supabase PostgreSQL
+
+`GET /api/health` answers `{"success":true,"database":true}` when the API is up
+and connected, and `503` when it cannot reach PostgreSQL.
+
+Both hosts redeploy on every push to `main`. The website proxies `/api/*` to the
+API so the session cookie stays first-party.
+
+The API runs on Render's free plan: it sleeps after 15 minutes without traffic and
+takes about a minute to wake, so the first request after a quiet spell is slow.
+
+See the [deployment guide](docs/DEPLOYMENT.md) for how this is set up and for the
+limits the free plans impose.
